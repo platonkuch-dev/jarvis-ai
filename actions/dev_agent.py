@@ -260,11 +260,20 @@ def _install_dependencies(dependencies: list[str], project_dir: Path) -> str:
     to_install = []
     for dep in dependencies:
         pkg_name = re.split(r"[>=<!]", dep)[0].strip()
-        result = subprocess.run(
-            [sys.executable, "-m", "pip", "show", pkg_name],
-            capture_output=True, text=True
-        )
-        if result.returncode != 0:
+        # Unlike the pip install call below, this had no timeout -- a hung
+        # pip (lock contention from another concurrent pip, a stuck proxy)
+        # would block this thread-pool worker forever, and with it the
+        # dev_agent tool call, which the voice loop then waits on indefinitely.
+        try:
+            result = subprocess.run(
+                [sys.executable, "-m", "pip", "show", pkg_name],
+                capture_output=True, text=True, timeout=30
+            )
+            already_installed = result.returncode == 0
+        except subprocess.TimeoutExpired:
+            print(f"[DevAgent] pip show timed out for {pkg_name} — assuming not installed")
+            already_installed = False
+        if not already_installed:
             to_install.append(dep)
         else:
             print(f"[DevAgent] ✓ Already installed: {pkg_name}")
