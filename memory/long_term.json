@@ -1,0 +1,35 @@
+{
+  "identity": {
+    "language": {
+      "value": "Russian",
+      "updated": "2026-07-09"
+    },
+    "city": {
+      "value": "Dnipro",
+      "updated": "2026-07-10"
+    },
+    "name": {
+      "value": "Platon",
+      "updated": "2026-07-10"
+    }
+  },
+  "preferences": {
+    "address_term": {
+      "value": "sir/none",
+      "updated": "2026-07-10"
+    },
+    "tesla_coil_discharge": {
+      "value": "20-25 cm",
+      "updated": "2026-07-10"
+    }
+  },
+  "projects": {
+    "bike_shop_ambassador": {
+      "value": "Ambassador for a bike shop",
+      "updated": "2026-07-10"
+    }
+  },
+  "relationships": {},
+  "wishes": {},
+  "notes": {}
+}

@@ -1,0 +1,24 @@
+# --- secrets ---
+config/api_keys.json
+config/certs/*.key
+config/certs/*.crt
+
+# --- python ---
+__pycache__/
+*.pyc
+.venv/
+*.egg-info/
+
+# --- build artifacts ---
+build/
+dist/
+
+# --- runtime logs (crash logs analyzed once, not source of truth going forward) ---
+*.log
+
+# --- node / rust experimental track ---
+agent-ts/node_modules/
+native-core/target/
+
+# --- editor/local tooling ---
+.claude/

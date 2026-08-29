@@ -1,0 +1,29 @@
+{
+  "name": "@jarvis/agent",
+  "version": "0.1.0",
+  "description": "JARVIS orchestration layer: agent loop, tool registry, permission manager, and the bridge to native-core (Rust).",
+  "private": true,
+  "type": "module",
+  "engines": {
+    "node": ">=22.6.0"
+  },
+  "scripts": {
+    "cli": "node src/cli.ts",
+    "test": "vitest run",
+    "typecheck": "tsc --noEmit",
+    "build": "tsc",
+    "lint": "tsc --noEmit"
+  },
+  "dependencies": {
+    "@anthropic-ai/sdk": "^0.68.0",
+    "zod": "^3.24.1"
+  },
+  "devDependencies": {
+    "@types/node": "^22.10.2",
+    "typescript": "^5.7.2",
+    "vitest": "^2.1.8"
+  },
+  "allowScripts": {
+    "esbuild@0.21.5": true
+  }
+}
