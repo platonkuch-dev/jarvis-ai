@@ -101,6 +101,39 @@ def _get_api_key() -> str:
     return runtime_config.get_config()["gemini_api_key"]
 
 
+def _flatten_exceptions(exc: BaseException) -> list[BaseException]:
+    """
+    asyncio.TaskGroup wraps whatever its child tasks raise in a Base
+    ExceptionGroup/ExceptionGroup — str(group) is always the generic
+    "unhandled errors in a TaskGroup (N sub-exceptions)", it never contains
+    the real error message. Every keyword-based error classification in
+    run() (network vs. invalid API key vs. audio device vs. everything
+    else) was matching against that generic string and therefore NEVER
+    matched for any error raised from inside the TaskGroup body — only
+    errors raised before the TaskGroup was entered (e.g. connect() failing
+    on a bad key) happened to classify correctly by accident. This walks
+    nested groups and returns the real leaf exceptions so classification
+    can look at what actually broke.
+    """
+    if isinstance(exc, (ExceptionGroup, BaseExceptionGroup)):
+        leaves: list[BaseException] = []
+        for sub in exc.exceptions:
+            leaves.extend(_flatten_exceptions(sub))
+        return leaves
+    return [exc]
+
+
+def _is_audio_device_error(exc: BaseException) -> bool:
+    """True if `exc` is sounddevice/PortAudio failing to open or write to a
+    device — e.g. no driver installed, or the default device was unplugged.
+    This is a local hardware/driver problem, not a Gemini/network problem,
+    so it must NOT be classified as a network error (see run()'s handling)."""
+    if isinstance(exc, sd.PortAudioError):
+        return True
+    name = type(exc).__name__
+    return "PortAudioError" in name
+
+
 def _load_system_prompt() -> str:
     try:
         return PROMPT_PATH.read_text(encoding="utf-8")
@@ -1655,12 +1688,39 @@ class JarvisLive:
                 # externally, which `except Exception` would miss, letting the
                 # exception escape the while-loop and causing asyncio.run() to
                 # start shutdown — resulting in "executor after shutdown" errors).
-                err_str = str(e)
                 print(f"[JARVIS] Error ({type(e).__name__}): {e}")
                 traceback.print_exc()
 
+                # `e` itself is usually just an (Base)ExceptionGroup wrapper
+                # once we're inside the TaskGroup — str(e) is always the
+                # generic "unhandled errors in a TaskGroup (N sub-exceptions)"
+                # and never contains the real error, so every keyword check
+                # below used to silently never match for in-session errors
+                # (network drops, Gemini 1011s, PortAudioError, ...) and they
+                # all fell into the catch-all `else` branch below. Unwrap to
+                # the real leaf exception(s) so classification actually works.
+                leaves = _flatten_exceptions(e)
+                err_str = "; ".join(f"{type(x).__name__}: {x}" for x in leaves)
+
+                # Local audio device problem (no driver / device unplugged) —
+                # this has nothing to do with the Gemini connection, so
+                # reconnecting rapidly every few seconds just spams retries
+                # that can never succeed until the user fixes their sound
+                # settings. Surface it plainly and back off slowly instead.
+                if any(_is_audio_device_error(x) for x in leaves):
+                    self.ui.write_log(
+                        "AUDIO: не найдено аудиоустройство (нет драйвера или устройство "
+                        "недоступно) — проверьте настройки звука Windows. "
+                        "Переподключение к Gemini это не исправит."
+                    )
+                    # Falls through to the shared reconnect-delay tail below
+                    # (same as every other branch) — do NOT `continue` here,
+                    # that would skip the `await asyncio.sleep(delay)` at the
+                    # bottom of the loop and spin-reconnect with no wait at all.
+                    self._conn_backoff = 20
+
                 # Invalid API key — stop hammering the API, prompt re-configuration
-                if "API key not valid" in err_str or "1007" in err_str:
+                elif "API key not valid" in err_str or "1007" in err_str:
                     self.ui.write_log("ERR: API key invalid — please re-enter your key.")
                     self.ui.set_state("SLEEPING")
                     self.ui.prompt_reconfig()
@@ -1671,11 +1731,10 @@ class JarvisLive:
                     continue
 
                 # Network / timeout errors — log clearly and back off
-                is_net_err = any(k in err_str for k in (
+                elif any(k in err_str for k in (
                     "TimeoutError", "timed out", "getaddrinfo", "CancelledError",
                     "ConnectionRefusedError", "OSError", "Cannot connect",
-                ))
-                if is_net_err:
+                )):
                     _conn_backoff = min(getattr(self, "_conn_backoff", 3) * 2, 60)
                     self._conn_backoff = _conn_backoff
                     self.ui.write_log(
