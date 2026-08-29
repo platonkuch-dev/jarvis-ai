@@ -1155,6 +1155,22 @@ class JarvisLive:
                         asyncio.create_task(self._handle_fast_path_utterance(audio))
 
     async def _handle_fast_path_utterance(self, audio: np.ndarray) -> None:
+        # This method only ever runs as a bare asyncio.create_task(...) (see
+        # the wake-word branch above) — nothing awaits it or reads its
+        # result. Before this try/except, an exception from transcribe()
+        # or fast_route() (e.g. a corrupt audio buffer, a bad STT model
+        # state) would kill the task silently: the user says a command
+        # after the wake word and JARVIS just never responds, with only an
+        # easy-to-miss "Task exception was never retrieved" line on stderr.
+        try:
+            await self._handle_fast_path_utterance_inner(audio)
+        except Exception as e:
+            print(f"[FastPath] Utterance handling failed: {e}")
+            traceback.print_exc()
+            self.ui.write_log(f"ERR: Fast Path could not process that: {e}")
+            self.set_speaking(False)
+
+    async def _handle_fast_path_utterance_inner(self, audio: np.ndarray) -> None:
         if audio.size == 0:
             return
         loop = asyncio.get_event_loop()
@@ -1333,7 +1349,14 @@ class JarvisLive:
                                 self._vision_busy = False
                                 async def _cam_close():
                                     await asyncio.sleep(2.0)
-                                    self.ui.stop_camera_stream()
+                                    # Fire-and-forget task (see actions/screen_processor.py's
+                                    # own _deferred_close for the same pattern) — swallow so a
+                                    # UI-teardown glitch doesn't surface as an unretrieved
+                                    # task exception with no user-visible symptom either way.
+                                    try:
+                                        self.ui.stop_camera_stream()
+                                    except Exception as e:
+                                        print(f"[Vision] Camera stream stop failed: {e}")
                                 asyncio.create_task(_cam_close())
 
                     if response.tool_call:
