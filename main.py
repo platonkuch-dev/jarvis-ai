@@ -1537,21 +1537,31 @@ class JarvisLive:
 
             if not text:
                 continue
-            # Wait up to 8s for session to become ready after a wake
-            for _ in range(80):
+            try:
+                # Wait up to 8s for session to become ready after a wake
+                for _ in range(80):
+                    if self.session:
+                        break
+                    await asyncio.sleep(0.1)
                 if self.session:
-                    break
-                await asyncio.sleep(0.1)
-            if self.session:
-                self._telegram_reply_target = chat_id
-                self._telegram_audio_chunks = []
-                await self.session.send_client_content(
-                    turns={"parts": [{"text": text}]},
-                    turn_complete=True,
-                )
-                self.ui.write_log(f"[Telegram]: {text}")
-            else:
-                print(f"[Telegram] Dropped command (no session): {text}")
+                    self._telegram_reply_target = chat_id
+                    self._telegram_audio_chunks = []
+                    await self.session.send_client_content(
+                        turns={"parts": [{"text": text}]},
+                        turn_complete=True,
+                    )
+                    self.ui.write_log(f"[Telegram]: {text}")
+                else:
+                    print(f"[Telegram] Dropped command (no session): {text}")
+            except Exception as e:
+                # Unlike the queue.get() try/except above, this used to be
+                # unguarded — a single send_client_content() failure (e.g.
+                # session torn down mid-send during a reconnect) killed this
+                # whole background task permanently, silently dropping every
+                # Telegram command for the rest of the process's life.
+                # _process_dashboard_commands() already guards its equivalent
+                # send; mirror that here so one bad send can't end the relay.
+                print(f"[Telegram] Failed to relay command to Gemini: {e}")
 
     # ── main loop ───────────────────────────────────────────────────────────
 
