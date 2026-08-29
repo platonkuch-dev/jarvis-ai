@@ -1025,6 +1025,18 @@ class JarvisLive:
             result = f"Tool '{name}' failed: {e}"
             traceback.print_exc()
             self.speak_error(name, e)
+            # screen_process sets _vision_busy=True *before* capturing (see
+            # above) so a concurrent duplicate call gets rejected by the
+            # cooldown check. If the capture itself then raises (no camera,
+            # screenshot permission error, ...), nothing else ever clears
+            # that flag -- _pending_vision never gets set, so _receive_audio's
+            # turn_complete handler (the normal place _vision_busy resets)
+            # never runs. Without this, one failed vision call permanently
+            # wedges screen_process for the rest of the session: every next
+            # attempt is rejected with "still processing the previous
+            # request" until a full Gemini reconnect happens to reset it.
+            if name == "screen_process":
+                self._vision_busy = False
 
         if not self.ui.muted:
             self.ui.set_state("LISTENING")
