@@ -81,6 +81,7 @@ from core.session import (
 # the Stage 2 module split (see REWORK_PLAN.md). JarvisLive keeps thin
 # `_foo` wrapper methods that delegate into these.
 from core import audio_pipeline, fast_path, tool_dispatch
+from core import system_monitor_bridge, dashboard_bridge, telegram_bridge
 from core.audio_pipeline import CHANNELS, SEND_SAMPLE_RATE, RECEIVE_SAMPLE_RATE, CHUNK_SIZE
 
 
@@ -791,153 +792,28 @@ class JarvisLive:
 
     # ── System monitor ──────────────────────────────────────────────────────────
 
-    async def _run_system_monitor(self) -> None:
-        """Background task: voice alerts when metrics exceed thresholds."""
-        while True:
-            await asyncio.sleep(10)
-            alert = await asyncio.to_thread(self._sys_monitor.check)
-            if alert and self.session:
-                try:
-                    await self.session.send_client_content(
-                        turns={"parts": [{"text": alert}]},
-                        turn_complete=True,
-                    )
-                except Exception as e:
-                    print(f"[Monitor] ⚠️ Could not send alert: {e}")
+    # ── System monitor / Proactive mode / Dashboard bridge / Telegram bridge
+    # (moved to core/system_monitor_bridge.py, core/dashboard_bridge.py and
+    # core/telegram_bridge.py in the Stage 2 module split, see
+    # REWORK_PLAN.md) ──
 
-    # ── Proactive mode ──────────────────────────────────────────────────────────
+    async def _run_system_monitor(self) -> None:
+        await system_monitor_bridge.run_system_monitor(self)
 
     async def _run_proactive_mode(self) -> None:
-        """
-        Background task: periodically checks if the user has been silent long enough,
-        then hands time + memory context to Gemini so it can decide what (if anything)
-        to say proactively. No hardcoded rules — Gemini makes the call.
-        """
-        while True:
-            await asyncio.sleep(60)   # evaluate once per minute
-
-            if not self.session:
-                continue
-
-            with self._speaking_lock:
-                speaking = self._is_speaking
-            if speaking:
-                continue
-
-            if not self._proactive.should_trigger(self._last_user_speech):
-                continue
-
-            self._proactive.mark_triggered()
-
-            try:
-                memory = await asyncio.to_thread(load_memory)
-                prompt = self._proactive.build_prompt(memory)
-                await self.session.send_client_content(
-                    turns={"parts": [{"text": prompt}]},
-                    turn_complete=True,
-                )
-                self.ui.write_log("SYS: Proactive check-in.")
-            except Exception as e:
-                print(f"[Proactive] ⚠️ {e}")
-
-    # ── Phone audio relay ────────────────────────────────────────────────────────
+        await system_monitor_bridge.run_proactive_mode(self)
 
     async def _relay_phone_audio(self) -> None:
-        """Forward phone mic PCM chunks from dashboard queue into the Gemini Live session."""
-        q = self._dashboard._phone_audio_queue
-        while True:
-            try:
-                chunk = await asyncio.wait_for(q.get(), timeout=1.0)
-            except asyncio.TimeoutError:
-                # No audio for 1 s → phone mic inactive, give PC mic back
-                self._phone_active = False
-                continue
-            self._phone_active = True   # phone is streaming — silence PC mic
-            with self._speaking_lock:
-                speaking = self._is_speaking
-            if not speaking and not self.ui.muted:
-                try:
-                    self.out_queue.put_nowait(chunk)
-                except asyncio.QueueFull:
-                    pass
+        await dashboard_bridge.relay_phone_audio(self)
 
     def _on_phone_connected(self) -> None:
-        self.ui.write_log("SYS: Phone connected via Remote Dashboard.")
-        self.ui.notify_phone_connected()
-
-    # ── dashboard command relay ─────────────────────────────────────────────
+        dashboard_bridge.on_phone_connected(self)
 
     async def _process_dashboard_commands(self) -> None:
-        while True:
-            try:
-                text = await asyncio.wait_for(
-                    self._dashboard._command_queue.get(), timeout=0.5
-                )
-                if not text:
-                    continue
-                # Wait up to 8s for session to become ready after a wake
-                for _ in range(80):
-                    if self.session:
-                        break
-                    await asyncio.sleep(0.1)
-                if self.session:
-                    await self.session.send_client_content(
-                        turns={"parts": [{"text": text}]},
-                        turn_complete=True,
-                    )
-                    self.ui.write_log(f"[Web]: {text}")
-                else:
-                    print(f"[Dashboard] Dropped command (no session): {text}")
-            except asyncio.TimeoutError:
-                pass
-            except Exception as e:
-                print(f"[Dashboard] Command error: {e}")
-                await asyncio.sleep(0.5)
-
-    # ── Telegram userbot command relay ──────────────────────────────────────
+        await dashboard_bridge.process_dashboard_commands(self)
 
     async def _process_telegram_commands(self) -> None:
-        if not self._telegram:
-            return
-        while True:
-            try:
-                text, chat_id = await asyncio.wait_for(
-                    self._telegram._command_queue.get(), timeout=0.5
-                )
-            except asyncio.TimeoutError:
-                continue
-            except Exception as e:
-                print(f"[Telegram] Command error: {e}")
-                await asyncio.sleep(0.5)
-                continue
-
-            if not text:
-                continue
-            try:
-                # Wait up to 8s for session to become ready after a wake
-                for _ in range(80):
-                    if self.session:
-                        break
-                    await asyncio.sleep(0.1)
-                if self.session:
-                    self._telegram_reply_target = chat_id
-                    self._telegram_audio_chunks = []
-                    await self.session.send_client_content(
-                        turns={"parts": [{"text": text}]},
-                        turn_complete=True,
-                    )
-                    self.ui.write_log(f"[Telegram]: {text}")
-                else:
-                    print(f"[Telegram] Dropped command (no session): {text}")
-            except Exception as e:
-                # Unlike the queue.get() try/except above, this used to be
-                # unguarded — a single send_client_content() failure (e.g.
-                # session torn down mid-send during a reconnect) killed this
-                # whole background task permanently, silently dropping every
-                # Telegram command for the rest of the process's life.
-                # _process_dashboard_commands() already guards its equivalent
-                # send; mirror that here so one bad send can't end the relay.
-                print(f"[Telegram] Failed to relay command to Gemini: {e}")
+        await telegram_bridge.process_telegram_commands(self)
 
     # ── main loop ───────────────────────────────────────────────────────────
 
