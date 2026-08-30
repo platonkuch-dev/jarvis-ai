@@ -259,32 +259,6 @@ def _scrape_video_info(video_id: str) -> dict:
         return {}
 
 
-def _scrape_trending(region: str = "TR", max_results: int = 8) -> list[dict]:
-    if not _REQUESTS_OK:
-        return []
-    url = f"https://www.youtube.com/feed/trending?gl={region.upper()}"
-    try:
-        r    = requests.get(url, headers=HEADERS, timeout=12)
-        html = r.text
-
-        titles   = re.findall(r'"title":\{"runs":\[\{"text":"([^"]+)"\}\]', html)
-        channels = re.findall(r'"ownerText":\{"runs":\[\{"text":"([^"]+)"', html)
-
-        results, seen = [], set()
-        for i, title in enumerate(titles):
-            if title in seen or len(title) < 5:
-                continue
-            seen.add(title)
-            channel = channels[i] if i < len(channels) else "Unknown"
-            results.append({"rank": len(results) + 1, "title": title, "channel": channel})
-            if len(results) >= max_results:
-                break
-
-        return results
-    except Exception as e:
-        print(f"[YouTube] ⚠️ Trending scrape failed: {e}")
-        return []
-
 def _handle_play(parameters: dict, player) -> str:
     query = parameters.get("query", "").strip()
     if not query:
@@ -385,27 +359,31 @@ def _handle_get_info(parameters: dict, player, speak) -> str:
 
 
 def _handle_trending(parameters: dict, player, speak) -> str:
+    # This used to regex-scrape https://www.youtube.com/feed/trending, but
+    # that page no longer embeds video data in the plain HTML response for a
+    # non-JS client (confirmed live: 0 videoRenderer/videoId matches) --
+    # YouTube now requires real browser JS execution or an authenticated
+    # YouTube Data API v3 call (OAuth, not just an API key -- confirmed live,
+    # the existing gemini_api_key gets a 401 CREDENTIALS_MISSING) to see the
+    # actual feed. The old scraper's loose regex still matched unrelated
+    # sidebar/settings-menu strings from the empty page shell ("Try
+    # searching to get started", "Keyboard shortcuts", ...) and spoke those
+    # as if they were real trending videos -- see AUDIT.md #5. Rather than
+    # silently doing that again, or half-fixing it with a scraper of
+    # uncertain reliability, this is an honest "not available" until a real
+    # data source (a configured YouTube Data API key, or a Playwright-driven
+    # scrape like actions/flight_finder.py's) is wired in.
     region = parameters.get("region", "TR").upper()
-
+    msg = (
+        f"Sir, I can't show trending videos right now — YouTube's trending "
+        f"page no longer works with a simple scrape, and there's no YouTube "
+        f"API key configured. I can search for or play a specific video instead."
+    )
     if player:
-        player.write_log(f"[YouTube] Trending: {region}")
-
-    trending = _scrape_trending(region=region, max_results=8)
-    if not trending:
-        return f"Could not fetch trending videos for region {region}, sir."
-
-    lines  = [f"Top trending videos in {region}:"]
-    lines += [f"{v['rank']}. {v['title']} — {v['channel']}" for v in trending]
-    result = "\n".join(lines)
-
+        player.write_log(f"[YouTube] Trending unavailable (region {region}) — see AUDIT.md #5")
     if speak:
-        top3   = trending[:3]
-        spoken = "Here are the top trending videos, sir. " + ". ".join(
-            f"Number {v['rank']}: {v['title']} by {v['channel']}" for v in top3
-        )
-        speak(spoken)
-
-    return result
+        speak(msg)
+    return msg
 
 _ACTION_MAP = {
     "play":      _handle_play,

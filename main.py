@@ -191,15 +191,16 @@ TOOL_DECLARATIONS = [
         "name": "youtube_video",
         "description": (
             "Controls YouTube. Use for: playing videos, summarizing a video's content, "
-            "getting video info, or showing trending videos."
+            "or getting video info. Trending videos are NOT currently available -- if the "
+            "user asks for trending/popular videos, tell them that's not working right now "
+            "instead of calling this tool with action=trending."
         ),
         "parameters": {
             "type": "OBJECT",
             "properties": {
-                "action": {"type": "STRING", "description": "play | summarize | get_info | trending (default: play)"},
+                "action": {"type": "STRING", "description": "play | summarize | get_info (default: play)"},
                 "query":  {"type": "STRING", "description": "Search query for play action"},
                 "save":   {"type": "BOOLEAN", "description": "Save summary to Notepad (summarize only)"},
-                "region": {"type": "STRING", "description": "Country code for trending e.g. TR, US"},
                 "url":    {"type": "STRING", "description": "Video URL for get_info action"},
             },
             "required": []
