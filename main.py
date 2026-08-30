@@ -1034,7 +1034,17 @@ class JarvisLive:
                         "(VPN gerekiyor olabilir)"
                     )
                 else:
+                    # Catch-all -- most commonly a Gemini Live server-side error
+                    # (e.g. websocket close code 1011 "Internal error occurred",
+                    # seen in jarvis_hud.err.log from an earlier session) that
+                    # isn't the user's fault and isn't classifiable as audio/
+                    # API-key/network. This branch used to set a 3s backoff with
+                    # no ui.write_log() call at all -- every OTHER branch tells
+                    # the user something happened, this one reconnected in
+                    # silence, which reads as JARVIS randomly going quiet for a
+                    # few seconds with no explanation.
                     self._conn_backoff = 3
+                    self.ui.write_log(f"ERR: {err_str[:200]} — reconnecting in 3s...")
             finally:
                 self.session = None
 
