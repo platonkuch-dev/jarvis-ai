@@ -42,7 +42,6 @@ for _stream_name in ("stdout", "stderr"):
             pass
 
 import asyncio
-import re
 import threading
 import time
 import json
@@ -51,15 +50,12 @@ from datetime import datetime
 from pathlib import Path
 
 import numpy as np
-import sounddevice as sd
 from google import genai
 from google.genai import types
 from ui import JarvisUI
 from core.path_utils import resource_path
 from core import runtime_config, latency
 from voice.pipeline import VoicePipeline
-from voice.wake_word import FRAME_SIZE as FAST_PATH_FRAME_SIZE
-from voice.fast_router import route as fast_route, RouteResult, INTENT_DISPATCH as FAST_PATH_INTENT_DISPATCH
 from voice.intent_classifier import IntentClassifier
 from memory.memory_manager import (
     load_memory, update_memory, format_memory_for_prompt,
@@ -101,13 +97,15 @@ from core.session import (
     load_system_prompt as _load_system_prompt,
     clean_transcript as _clean_transcript,
 )
+# Audio pipeline (mic/speaker I/O, response handling) and Fast Path (local
+# wake word/STT/router/TTS) -- moved to core/audio_pipeline.py and
+# core/fast_path.py in the Stage 2 module split (see REWORK_PLAN.md).
+# JarvisLive keeps thin `_foo` wrapper methods that delegate into these.
+from core import audio_pipeline, fast_path
+from core.audio_pipeline import CHANNELS, SEND_SAMPLE_RATE, RECEIVE_SAMPLE_RATE, CHUNK_SIZE
 
 
 BASE_DIR        = Path(__file__).resolve().parent
-CHANNELS            = 1
-SEND_SAMPLE_RATE    = 16000
-RECEIVE_SAMPLE_RATE = 24000
-CHUNK_SIZE          = 1024
 
 TOOL_DECLARATIONS = [
     {
@@ -1006,382 +1004,29 @@ class JarvisLive:
             response={"result": result}
         )
 
+    # ── Audio pipeline + Fast Path (moved to core/audio_pipeline.py and
+    # core/fast_path.py in the Stage 2 module split, see REWORK_PLAN.md) ──
+
     async def _send_realtime(self):
-        while True:
-            msg = await self.out_queue.get()
-            await self.session.send_realtime_input(media=msg)
+        await audio_pipeline.send_realtime(self)
 
     async def _listen_audio(self):
-        print("[JARVIS] 🎤 Mic started")
-        loop = asyncio.get_event_loop()
-
-        def callback(indata, frames, time_info, status):
-            with self._speaking_lock:
-                jarvis_speaking = self._is_speaking
-            with self._fast_path_lock:
-                fast_path_recording = self._fast_path_state == "recording"
-            # Normally the mic is gated shut while JARVIS is speaking, so it can never
-            # hear its own voice from the speakers. With barge-in enabled we keep the
-            # mic open through JARVIS's speech too — the user is expected to be on
-            # headphones, so there's no echo, and Gemini's server-side VAD (the
-            # default START_OF_ACTIVITY_INTERRUPTS behavior) handles the actual cutoff
-            # once it detects genuine new speech; see the `interrupted` handling below.
-            # Also gated while the Fast Path is actively recording a locally-handled
-            # utterance — otherwise Gemini would hear the same command and potentially
-            # execute it a second time via its own function-calling.
-            gated = (jarvis_speaking and not self.ui.barge_in_enabled) or fast_path_recording
-            if not gated and not self.ui.muted and not self._phone_active:
-                data = indata.tobytes()
-                loop.call_soon_threadsafe(
-                    self.out_queue.put_nowait,
-                    {"data": data, "mime_type": "audio/pcm"}
-                )
-            # Fast Path always gets a copy (independent of Gemini's own gating)
-            # so the wake word can fire even while JARVIS/Gemini is mid-turn.
-            if not self.ui.muted and not self._phone_active and self._fast_path_queue is not None:
-                loop.call_soon_threadsafe(self._fast_path_queue.put_nowait, indata.copy())
-
-        try:
-            with sd.InputStream(
-                samplerate=SEND_SAMPLE_RATE,
-                channels=CHANNELS,
-                dtype="int16",
-                blocksize=CHUNK_SIZE,
-                callback=callback,
-            ):
-                print("[JARVIS] 🎤 Mic stream open")
-                while True:
-                    await asyncio.sleep(0.1)
-        except Exception as e:
-            print(f"[JARVIS] ❌ Mic: {e}")
-            raise
-
-    # ── Fast Path (local wake word / STT / router / TTS) ────────────────────
+        await audio_pipeline.listen_audio(self)
 
     async def _run_fast_path(self) -> None:
-        """
-        Consumes the raw audio the mic callback fans out, independent of
-        whatever Gemini is doing. Re-slices arbitrary-sized input blocks
-        into the fixed 1280-sample (80ms) frames openWakeWord/Silero VAD
-        require, runs wake-word detection on every frame while idle, and
-        once triggered, records until real trailing silence (not a fixed
-        sleep) before handing the utterance off for transcription+routing.
-        """
-        self._fast_path_queue = asyncio.Queue()
-        frame_buffer = np.zeros(0, dtype=np.int16)
-        recording_frames: list[np.ndarray] = []
-        frame_ms = FAST_PATH_FRAME_SIZE / SEND_SAMPLE_RATE * 1000
-
-        while True:
-            block = await self._fast_path_queue.get()
-            samples = block.reshape(-1).astype(np.int16)
-            frame_buffer = np.concatenate([frame_buffer, samples])
-
-            while len(frame_buffer) >= FAST_PATH_FRAME_SIZE:
-                frame, frame_buffer = frame_buffer[:FAST_PATH_FRAME_SIZE], frame_buffer[FAST_PATH_FRAME_SIZE:]
-
-                with self._fast_path_lock:
-                    state = self._fast_path_state
-
-                if state == "idle":
-                    if not self._voice_pipeline.is_ready:
-                        continue  # still prewarming — don't attempt detection on a half-loaded model
-                    try:
-                        triggered = await asyncio.to_thread(self._voice_pipeline.wake_word.check_trigger, frame)
-                    except Exception as e:
-                        print(f"[FastPath] Wake word error: {e}")
-                        continue
-                    if triggered:
-                        # Barge-in for local TTS: the wake-word check keeps
-                        # running even while a Fast Path response is still
-                        # playing (this branch only requires state=="idle",
-                        # which _handle_fast_path_utterance() already
-                        # restores before its TTS call starts — see below).
-                        # A fresh "Hey Jarvis" mid-sentence should cut the
-                        # old response off immediately rather than let it
-                        # keep talking over the new command. stop() is a
-                        # cheap no-op if nothing is currently playing.
-                        self._voice_pipeline.tts.stop()
-                        self._voice_pipeline.wake_word.reset()
-                        self._voice_pipeline.vad.start_utterance()
-                        recording_frames = []
-                        with self._fast_path_lock:
-                            self._fast_path_state = "recording"
-                        self.ui.write_log("SYS: Fast Path — wake word detected, listening...")
-                        latency.record("fast_path_wake_word", 0.0)
-
-                elif state == "recording":
-                    recording_frames.append(frame)
-                    try:
-                        done = await asyncio.to_thread(self._voice_pipeline.vad.feed, frame, frame_ms)
-                    except Exception as e:
-                        print(f"[FastPath] VAD error: {e}")
-                        done = True
-                    if done:
-                        with self._fast_path_lock:
-                            self._fast_path_state = "idle"
-                        audio = np.concatenate(recording_frames) if recording_frames else np.zeros(0, dtype=np.int16)
-                        recording_frames = []
-                        asyncio.create_task(self._handle_fast_path_utterance(audio))
+        await fast_path.run_fast_path(self)
 
     async def _handle_fast_path_utterance(self, audio: np.ndarray) -> None:
-        # This method only ever runs as a bare asyncio.create_task(...) (see
-        # the wake-word branch above) — nothing awaits it or reads its
-        # result. Before this try/except, an exception from transcribe()
-        # or fast_route() (e.g. a corrupt audio buffer, a bad STT model
-        # state) would kill the task silently: the user says a command
-        # after the wake word and JARVIS just never responds, with only an
-        # easy-to-miss "Task exception was never retrieved" line on stderr.
-        try:
-            await self._handle_fast_path_utterance_inner(audio)
-        except Exception as e:
-            print(f"[FastPath] Utterance handling failed: {e}")
-            traceback.print_exc()
-            self.ui.write_log(f"ERR: Fast Path could not process that: {e}")
-            self.set_speaking(False)
+        await fast_path.handle_fast_path_utterance(self, audio)
 
     async def _handle_fast_path_utterance_inner(self, audio: np.ndarray) -> None:
-        if audio.size == 0:
-            return
-        loop = asyncio.get_event_loop()
-        t_start = time.monotonic()
-
-        text = await loop.run_in_executor(None, self._voice_pipeline.transcribe, audio)
-        if not text:
-            self.ui.write_log("SYS: Fast Path — heard nothing usable.")
-            return
-
-        self.ui.write_log(f"You: {text}")
-        result = await loop.run_in_executor(None, fast_route, text)
-
-        # Regex missed — try the MiniLM fuzzy-intent tier before giving up
-        # on the Fast Path entirely (priority ladder: exact > regex >
-        # classifier > LLM). Zero-arg intents only; see intent_classifier.py
-        # for why parameterized commands are deliberately excluded here.
-        if not result.matched and self._intent_classifier.is_ready:
-            intent_result = await loop.run_in_executor(None, self._intent_classifier.classify, text)
-            if intent_result.matched:
-                handler = FAST_PATH_INTENT_DISPATCH.get(intent_result.intent)
-                if handler is not None:
-                    try:
-                        message = await loop.run_in_executor(None, handler, None)
-                        result = RouteResult(
-                            matched=True, rule_name=f"minilm:{intent_result.intent}",
-                            success=True, message=message,
-                        )
-                        self.ui.write_log(
-                            f"SYS: Fast Path fuzzy match '{intent_result.intent}' "
-                            f"(confidence {intent_result.confidence:.2f})"
-                        )
-                    except Exception as e:
-                        result = RouteResult(
-                            matched=True, rule_name=f"minilm:{intent_result.intent}",
-                            success=False, message=f"Fast path '{intent_result.intent}' failed: {e}",
-                        )
-
-        if result.matched:
-            latency.record("fast_path_total", (time.monotonic() - t_start) * 1000)
-            self.ui.write_log(f"Jarvis: {result.message}")
-            self.set_speaking(True)
-            try:
-                await loop.run_in_executor(None, self._voice_pipeline.tts.speak, result.message)
-            except Exception as e:
-                print(f"[FastPath] TTS error: {e}")
-            finally:
-                self.set_speaking(False)
-            return
-
-        # No fast rule matched — hand the ALREADY-TRANSCRIBED text to the
-        # existing Smart Path exactly like a typed/dashboard/Telegram command
-        # (same _on_text_command Gemini already uses for those), so Gemini's
-        # reasoning and its own audio-out TTS handle it unchanged.
-        latency.record("fast_path_passthrough", (time.monotonic() - t_start) * 1000)
-        self._on_text_command(text)
+        await fast_path.handle_fast_path_utterance_inner(self, audio)
 
     async def _receive_audio(self):
-        print("[JARVIS] 👂 Recv started")
-        out_buf, in_buf = [], []
-
-        try:
-            while True:
-                async for response in self.session.receive():
-
-                    if response.data:
-                        if self._interrupted:
-                            pass  # discard: interrupted
-                        else:
-                            if self._turn_done_event and self._turn_done_event.is_set():
-                                self._turn_done_event.clear()
-                            # Split into ~50 ms chunks so interrupt() stops audio within 50 ms
-                            # (24000 Hz × 2 bytes/sample × 0.05 s = 2400 bytes per slice)
-                            _audio_data = response.data
-                            _SLICE = 2400
-                            for _i in range(0, len(_audio_data), _SLICE):
-                                self.audio_in_queue.put_nowait(_audio_data[_i : _i + _SLICE])
-                            if self._telegram and self._telegram_reply_target is not None:
-                                self._telegram_audio_chunks.append(_audio_data)
-
-                    if response.server_content:
-                        sc = response.server_content
-
-                        # Voice barge-in: the server detected genuine new speech while
-                        # JARVIS was talking (its default START_OF_ACTIVITY_INTERRUPTS
-                        # behavior) and cut its own response short. Mirror that locally
-                        # exactly like a manual Esc/Interrupt press.
-                        if sc.interrupted and not self._interrupted:
-                            print("[JARVIS] 🎙️ Voice barge-in — server interrupted response")
-                            self.interrupt()
-
-                        if sc.output_transcription and sc.output_transcription.text:
-                            txt = _clean_transcript(sc.output_transcription.text)
-                            if txt and txt != (out_buf[-1] if out_buf else ""):
-                                out_buf.append(txt)
-
-                        if sc.input_transcription and sc.input_transcription.text:
-                            txt = _clean_transcript(sc.input_transcription.text)
-                            if txt:
-                                in_buf.append(txt)
-                                self._last_user_speech = time.monotonic()
-
-                        if sc.turn_complete:
-                            if self._turn_done_event:
-                                self._turn_done_event.set()
-
-                            # If this turn_complete ends an interrupted response, clear the
-                            # flag and skip all further processing for that turn.
-                            if self._interrupted:
-                                self._interrupted = False
-                                in_buf  = []
-                                out_buf = []
-                                continue
-
-                            full_in = " ".join(in_buf).strip()
-                            if full_in:
-                                self.ui.write_log(f"You: {full_in}")
-                                if self._dashboard:
-                                    asyncio.create_task(self._dashboard.broadcast({
-                                        "type": "log", "speaker": "user",
-                                        "text": full_in,
-                                        "ts": datetime.now().isoformat(),
-                                    }))
-                            in_buf = []
-
-                            full_out = " ".join(out_buf).strip()
-
-                            _telegram_target = None
-                            if self._telegram and self._telegram_reply_target is not None:
-                                _telegram_target = self._telegram_reply_target
-                                self._telegram_reply_target = None
-
-                            if full_out:
-                                self.ui.write_log(f"Jarvis: {full_out}")
-                                if self._dashboard:
-                                    asyncio.create_task(self._dashboard.broadcast({
-                                        "type": "log", "speaker": "jarvis",
-                                        "text": full_out,
-                                        "ts": datetime.now().isoformat(),
-                                    }))
-                                if _telegram_target is not None:
-                                    asyncio.create_task(self._telegram.send_reply(_telegram_target, full_out))
-                            out_buf = []
-
-                            if _telegram_target is not None:
-                                pcm = b"".join(self._telegram_audio_chunks)
-                                self._telegram_audio_chunks = []
-                                if pcm and self._telegram.should_reply_with_voice(_telegram_target):
-                                    asyncio.create_task(self._telegram.send_voice(_telegram_target, pcm))
-
-                            # Vision injection: model finished tool-response turn → now send the image
-                            if self._pending_vision and self.session:
-                                import base64 as _b64
-                                img_b, mime_t, question, angle = self._pending_vision
-                                self._pending_vision = None
-                                b64 = _b64.b64encode(img_b).decode("ascii")
-                                print(f"[Vision] 📤 {len(img_b):,} bytes (angle={angle}) → main session")
-                                await self.session.send_client_content(
-                                    turns={"parts": [
-                                        {"inline_data": {"mime_type": mime_t, "data": b64}},
-                                        {"text": question},
-                                    ]},
-                                    turn_complete=True,
-                                )
-                                # Mark next turn_complete behaviour depending on angle
-                                if self._vision_cam_active:
-                                    # Camera: keep busy until JARVIS finishes speaking the answer
-                                    self._vision_cam_active    = False
-                                    self._vision_close_pending = True
-                                else:
-                                    # Screen-only: no camera to close; release busy flag now
-                                    self._vision_busy = False
-                            elif self._vision_close_pending:
-                                # This turn_complete IS the vision answer — close camera + release busy flag
-                                self._vision_close_pending = False
-                                self._vision_busy = False
-                                async def _cam_close():
-                                    await asyncio.sleep(2.0)
-                                    # Fire-and-forget task (see actions/screen_processor.py's
-                                    # own _deferred_close for the same pattern) — swallow so a
-                                    # UI-teardown glitch doesn't surface as an unretrieved
-                                    # task exception with no user-visible symptom either way.
-                                    try:
-                                        self.ui.stop_camera_stream()
-                                    except Exception as e:
-                                        print(f"[Vision] Camera stream stop failed: {e}")
-                                asyncio.create_task(_cam_close())
-
-                    if response.tool_call:
-                        fn_responses = []
-                        for fc in response.tool_call.function_calls:
-                            print(f"[JARVIS] 📞 {fc.name}")
-                            fr = await self._execute_tool(fc)
-                            fn_responses.append(fr)
-                        await self.session.send_tool_response(
-                            function_responses=fn_responses
-                        )
-        except Exception as e:
-            print(f"[JARVIS] ❌ Recv: {e}")
-            traceback.print_exc()
-            raise
+        await audio_pipeline.receive_audio(self)
 
     async def _play_audio(self):
-        print("[JARVIS] 🔊 Play started")
-
-        stream = sd.RawOutputStream(
-            samplerate=RECEIVE_SAMPLE_RATE,
-            channels=CHANNELS,
-            dtype="int16",
-            blocksize=CHUNK_SIZE,
-        )
-        stream.start()
-
-        try:
-            while True:
-                try:
-                    chunk = await asyncio.wait_for(
-                        self.audio_in_queue.get(),
-                        timeout=0.1
-                    )
-                except asyncio.TimeoutError:
-                    if (
-                        self._turn_done_event
-                        and self._turn_done_event.is_set()
-                        and self.audio_in_queue.empty()
-                    ):
-                        self.set_speaking(False)
-                        self._turn_done_event.clear()
-                    continue
-                self.set_speaking(True)
-                try:
-                    await asyncio.to_thread(stream.write, chunk)
-                except (RuntimeError, asyncio.CancelledError):
-                    break   # executor shutting down — exit cleanly
-        except Exception as e:
-            print(f"[JARVIS] ❌ Play: {e}")
-            raise
-        finally:
-            self.set_speaking(False)
-            stream.stop()
-            stream.close()
+        await audio_pipeline.play_audio(self)
 
     # ── System monitor ──────────────────────────────────────────────────────────
 
