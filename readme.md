@@ -166,7 +166,20 @@ repeating the target. See `windows_control/router.py` for the actual fallback lo
 
 ---
 
-## 🦀 Native Core & TypeScript Orchestrator (`native-core/` + `agent-ts/`) — experimental
+## 🦀 Native Core & TypeScript Orchestrator (`native-core/` + `agent-ts/`) — frozen, not used by JARVIS
+
+> **Status (2026-08-30): frozen.** This is **not** part of the running assistant — the voice
+> loop, Telegram, and memory all go through the Python path (`main.py`, `windows_control/`)
+> exclusively. Nothing here is wired into `main.py`'s Gemini Live tool-calling; the only way to
+> exercise this code today is `node src/cli.ts agent "..."` in a terminal, independent of JARVIS.
+> It's kept in the repo (not deleted) because it's genuinely well-tested — `cargo test` (17/17:
+> 9 unit + 8 integration, against a real Notepad) and `npm test` (25/25, including a full-stack
+> integration test that drives real `native-core.exe`) both pass as of this date — better test
+> coverage than the equivalent Python-side window-control tools have today. Treat it as a proven
+> architectural reference for a possible future migration, not a working feature. Revisit this
+> status by **2026-11-30** — either active integration into the voice loop has started, or the
+> "frozen" label should turn into "removed." See `REWORK_PLAN.md` §1 for the full reasoning and
+> the alternatives that were considered (continue as a parallel track / delete outright).
 
 An in-progress migration of the Windows Control Layer to the architecture described in the
 project's long-term design: a Rust system core, a TypeScript orchestration/agent layer, with
@@ -174,7 +187,8 @@ Claude as the reasoning engine calling schema-validated tools. **This does not r
 app** — `main.py` keeps running exactly as before. It's a parallel, independently working,
 independently tested implementation of one vertical slice (window/process management + UI
 Automation), proving the pattern before the rest of JARVIS (voice, Telegram, memory) migrates the
-same way in future passes.
+same way in future passes — *if and when that migration is actually picked back up (see the
+frozen-status note above).*
 
 ### Architecture
 
