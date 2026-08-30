@@ -18,7 +18,7 @@ import traceback
 
 from google.genai import types
 
-from core import latency
+from core import latency, tool_registry
 from memory.memory_manager import update_memory
 from memory.pattern_learning import log_tool_call
 
@@ -47,11 +47,30 @@ from actions.window_control    import window_manager, ui_automation, launch_and_
 async def execute_tool(self, fc) -> types.FunctionResponse:
         name = fc.name
         args = dict(fc.args or {})
+        confirmed = bool(args.pop("confirmed", False))
         _t_start = time.monotonic()
 
         print(f"[JARVIS] 🔧 {name}  {args}")
         self.ui.set_state("THINKING")
         log_tool_call(name, args)
+
+        # Risk gate: SENSITIVE/DANGEROUS actions (per core/tool_registry.py's
+        # classification, itself grounded in AUDIT.md's Stage-1 findings) do
+        # not run on the first recognized word -- the caller must re-invoke
+        # the exact same tool with confirmed=true after the user has
+        # explicitly agreed. This runs before the save_memory short-circuit
+        # too (save_memory is NORMAL/ungated, so it's a no-op for that path).
+        risk = tool_registry.resolve_risk(name, args)
+        if risk in tool_registry.GATED_LEVELS and not confirmed:
+            if not self.ui.muted:
+                self.ui.set_state("LISTENING")
+            latency.record(name, (time.monotonic() - _t_start) * 1000)
+            prompt = tool_registry.confirmation_prompt(name, args, risk)
+            print(f"[JARVIS] 🛑 {name} gated ({risk.name}) — awaiting confirmation")
+            return types.FunctionResponse(
+                id=fc.id, name=name,
+                response={"result": prompt}
+            )
 
         if name == "save_memory":
             category = args.get("category", "notes")

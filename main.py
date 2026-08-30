@@ -80,7 +80,7 @@ from core.session import (
 # core/audio_pipeline.py, core/fast_path.py and core/tool_dispatch.py in
 # the Stage 2 module split (see REWORK_PLAN.md). JarvisLive keeps thin
 # `_foo` wrapper methods that delegate into these.
-from core import audio_pipeline, fast_path, tool_dispatch
+from core import audio_pipeline, fast_path, tool_dispatch, tool_registry
 from core import system_monitor_bridge, dashboard_bridge, telegram_bridge
 from core.audio_pipeline import CHANNELS, SEND_SAMPLE_RATE, RECEIVE_SAMPLE_RATE, CHUNK_SIZE
 
@@ -610,6 +610,12 @@ TOOL_DECLARATIONS = [
         }
     },
 ]
+
+# Appends a `confirmed` boolean parameter to every tool's schema above, so
+# Gemini has somewhere to signal a user-confirmed retry of a SENSITIVE/
+# DANGEROUS action -- see core/tool_registry.py for the full risk model and
+# why both levels (not just DANGEROUS) are gated.
+tool_registry.add_confirmation_param(TOOL_DECLARATIONS)
 
 # --- Plugin system ---
 
