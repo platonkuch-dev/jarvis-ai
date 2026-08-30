@@ -21,7 +21,7 @@ import sys
 
 import sounddevice as sd
 
-from main import _flatten_exceptions, _is_audio_device_error
+from core.session import flatten_exceptions as _flatten_exceptions, is_audio_device_error as _is_audio_device_error
 
 failures = 0
 
