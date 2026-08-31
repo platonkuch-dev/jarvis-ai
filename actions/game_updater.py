@@ -982,6 +982,11 @@ def game_updater(parameters: dict, player=None, speak=None) -> str:
         return " ".join(results)
 
     if action in ("install", "update"):
+        # Interim ack: installing/updating can take a while, and until now
+        # nothing was said out loud until the whole thing finished. The
+        # messages returned below are NOT also speak()'d -- they're this
+        # tool's function_response, which Gemini narrates on its own.
+        if speak: speak(f"Starting the {action} now, sir.")
         if platform in ("steam", "both"):
             steam_path = _find_steam_path()
             if not steam_path:
@@ -1005,7 +1010,6 @@ def game_updater(parameters: dict, player=None, speak=None) -> str:
                             ).start()
                             msg += " Auto-shutdown enabled."
                         if player: player.write_log(f"[GameUpdater] {msg[:100]}")
-                        if speak:  speak(msg)
                         return msg
                     else:
                         results.append(
@@ -1041,7 +1045,6 @@ def game_updater(parameters: dict, player=None, speak=None) -> str:
 
         output = " | ".join(results) or "Nothing to do."
         if player: player.write_log(f"[GameUpdater] {output[:100]}")
-        if speak:  speak(output)
         return output
 
     return f"Unknown action: '{action}'."

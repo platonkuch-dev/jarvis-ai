@@ -133,7 +133,7 @@ async def execute_tool(self, fc) -> types.FunctionResponse:
                 result = r or "Reminder set."
 
             elif name == "youtube_video":
-                r = await loop.run_in_executor(None, lambda: youtube_video(parameters=args, response=None, player=self.ui))
+                r = await loop.run_in_executor(None, lambda: youtube_video(parameters=args, response=None, player=self.ui, speak=self.speak))
                 result = r or "Done."
 
             elif name == "send_screenshot":
@@ -213,7 +213,7 @@ async def execute_tool(self, fc) -> types.FunctionResponse:
                 result = r or "Done."
 
             elif name == "web_search":
-                r = await loop.run_in_executor(None, lambda: web_search_action(parameters=args, player=self.ui))
+                r = await loop.run_in_executor(None, lambda: web_search_action(parameters=args, player=self.ui, speak=self.speak))
                 result = r or "Done."
                 # Mirror results to the on-screen content panel
                 _mode = args.get("mode", "search")
@@ -247,7 +247,7 @@ async def execute_tool(self, fc) -> types.FunctionResponse:
                 result = r or "Done."
 
             elif name == "flight_finder":
-                r = await loop.run_in_executor(None, lambda: flight_finder(parameters=args, player=self.ui))
+                r = await loop.run_in_executor(None, lambda: flight_finder(parameters=args, player=self.ui, speak=self.speak))
                 result = r or "Done."
 
             elif name == "system_status":

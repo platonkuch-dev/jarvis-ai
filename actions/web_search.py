@@ -302,11 +302,21 @@ def _compare(items: list[str], aspect: str) -> tuple[str, str | None]:
 
 # ── Public entry point ─────────────────────────────────────────────────────────
 
+_SEARCH_ACK = {
+    "news":     "Checking the news now, sir.",
+    "research": "Researching that now, sir.",
+    "price":    "Checking the price now, sir.",
+    "compare":  "Comparing those now, sir.",
+    "search":   "Searching for that now, sir.",
+}
+
+
 def web_search(
     parameters:     dict,
     response=None,
     player=None,
     session_memory=None,
+    speak=None,
 ) -> str:
     params = parameters or {}
     query  = params.get("query", "").strip()
@@ -322,6 +332,14 @@ def web_search(
 
     if player:
         player.write_log(f"[Search:{mode}] {query or ', '.join(items)}")
+
+    # Grounded search is network-bound (measured 6-15s -- see core/config.py's
+    # CLAUDE_FAST_MODEL comment) and Gemini Live can't say anything else while
+    # this tool call is outstanding. Ack immediately, same pattern already
+    # shipped for flight_finder.py/youtube_video.py, so the user hears
+    # something within milliseconds instead of several seconds of silence.
+    if speak:
+        speak(_SEARCH_ACK.get(mode, _SEARCH_ACK["search"]))
 
     print(f"[WebSearch] 🔍 mode={mode!r}  query={query!r}")
 

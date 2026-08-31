@@ -250,15 +250,21 @@ def _build(description, language, output_path, args, timeout, speak=None, player
     if player:
         player.write_log("[Code] Build started...")
 
+    # Interim ack: this can be several LLM calls + subprocess runs deep
+    # before any of the return paths below fire, and until now nothing was
+    # said out loud for the whole stretch. The messages built at each return
+    # point below are NOT also speak()'d -- they're returned as this tool's
+    # function_response, which Gemini narrates on its own; speaking them here
+    # too would double-narrate the same text a moment later.
+    if speak: speak("Writing the code now, sir.")
+
     lang = language or "python"
 
     try:
         code, path = _write(description, lang, output_path, player, provider)
         print(f"[Code] ✅ Written: {path}")
     except Exception as e:
-        msg = f"Could not write initial code: {e}"
-        if speak: speak(msg)
-        return msg
+        return f"Could not write initial code: {e}"
 
     last_output = ""
     for attempt in range(1, MAX_BUILD_ATTEMPTS + 1):
@@ -274,7 +280,6 @@ def _build(description, language, output_path, args, timeout, speak=None, player
                 f"The code is working after {attempt} attempt{'s' if attempt > 1 else ''}. "
                 f"Saved to {path}."
             )
-            if speak: speak(msg)
             return f"{msg}\n\nOutput:\n{last_output}"
 
         print(f"[Code] ⚠️ Error on attempt {attempt}, fixing...")
@@ -285,15 +290,12 @@ def _build(description, language, output_path, args, timeout, speak=None, player
             code = _fix_code(code, last_output, description, provider)
             _save_file(path, code)
         except Exception as e:
-            msg = f"Could not fix code on attempt {attempt}: {e}"
-            if speak: speak(msg)
-            return msg
+            return f"Could not fix code on attempt {attempt}: {e}"
 
     msg = (
         f"I was unable to build a working version after {MAX_BUILD_ATTEMPTS} attempts. "
         f"The last error was: {last_output[:200]}"
     )
-    if speak: speak(msg)
     return f"{msg}\n\nLast code saved to: {path}"
 
 def _write_action(description, language, output_path, player, provider: str = "claude") -> str:

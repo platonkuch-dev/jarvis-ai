@@ -317,9 +317,11 @@ def _handle_summarize(parameters: dict, player, speak) -> str:
     except Exception as e:
         return f"Summary generation failed, sir: {e}"
 
-    if speak:
-        speak(summary)
-
+    # NOT also speak()'d here: `summary` is returned below as this tool's
+    # function_response, which Gemini already narrates on its own -- saying
+    # it again here would double-narrate the same summary. The two speak()
+    # calls above (fetching transcript / generating summary) are the interim
+    # acks that matter, ahead of the slow transcript+LLM steps.
     if parameters.get("save", False):
         saved_path = _save_summary(summary, url)
         return f"Summary complete and saved to Desktop: {saved_path}"
@@ -352,9 +354,9 @@ def _handle_get_info(parameters: dict, player, speak) -> str:
     ]
     result = "\n".join(lines)
 
-    if speak:
-        speak(f"Here's the video info, sir. {result.replace(chr(10), '. ')}")
-
+    # No speak() here: get_info has no slow step worth acking ahead of (a
+    # single fast scrape, ~1s measured), and this would just double-narrate
+    # `result` a second time once Gemini reads the function_response.
     return result
 
 
@@ -381,8 +383,9 @@ def _handle_trending(parameters: dict, player, speak) -> str:
     )
     if player:
         player.write_log(f"[YouTube] Trending unavailable (region {region}) — see AUDIT.md #5")
-    if speak:
-        speak(msg)
+    # No speak() here: this is an instant, static decline message -- nothing
+    # to ack ahead of, and it would double-narrate `msg` a second time once
+    # Gemini reads the function_response.
     return msg
 
 _ACTION_MAP = {

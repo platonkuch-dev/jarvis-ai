@@ -374,9 +374,12 @@ def flight_finder(parameters: dict, player=None, speak=None) -> str:
         flights = _parse_flights_with_gemini(raw_text, origin, destination, date)
         spoken  = _format_spoken(flights, origin, destination, date)
 
-        if speak:
-            speak(spoken)
-
+        # NOT also speak()'d here: `result` below is returned as this tool's
+        # function_response, and Gemini narrates that as part of its normal
+        # turn continuation -- speaking the identical text again here would
+        # double-narrate the same flight results. The two speak() calls above
+        # (search started / analysing) are the interim acks that matter:
+        # neither overlaps a return value, so nothing gets said twice.
         result = spoken
 
         if save and flights:

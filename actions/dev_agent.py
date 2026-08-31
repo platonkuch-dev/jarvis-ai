@@ -477,17 +477,20 @@ def _build_project(
         if player:
             player.write_log(f"[DevAgent] {msg}")
 
+    # Interim ack: this is a multi-file write/run/fix loop that can run for
+    # a while before any return path below fires. The messages built at each
+    # return point are NOT also speak()'d -- they're returned as this tool's
+    # function_response, which Gemini narrates on its own; speaking them here
+    # too would double-narrate the same text a moment later.
+    if speak: speak("Setting up the project now, sir.")
+
     log("Planning project structure...")
     try:
         plan = _plan_project(description, language, provider)
     except RateLimitError:
-        msg = "Rate limit reached. Please try again in a moment."
-        if speak: speak(msg)
-        return msg
+        return "Rate limit reached. Please try again in a moment."
     except ValueError as e:
-        msg = f"Planning failed: {e}"
-        if speak: speak(msg)
-        return msg
+        return f"Planning failed: {e}"
 
     proj_name    = project_name or plan.get("project_name", "jarvis_project")
     proj_name    = re.sub(r"[^\w\-]", "_", proj_name)
@@ -539,9 +542,7 @@ def _build_project(
                 break
 
     if not file_codes:
-        msg = "I could not write any project files."
-        if speak: speak(msg)
-        return msg
+        return "I could not write any project files."
 
     if dependencies:
         install_result = _install_dependencies(dependencies, project_dir)
@@ -563,7 +564,6 @@ def _build_project(
                 f"Built in {attempt} attempt{'s' if attempt > 1 else ''}. "
                 f"Saved to: {project_dir}"
             )
-            if speak: speak(msg)
             return f"{msg}\n\nOutput:\n{last_output}"
 
         if attempt == MAX_FIX_ATTEMPTS:
@@ -593,9 +593,7 @@ def _build_project(
             file_codes.update(updated)
             time.sleep(1)
         except RateLimitError:
-            msg = "Rate limit reached during fix. Project saved, check it manually in VSCode."
-            if speak: speak(msg)
-            return msg
+            return "Rate limit reached during fix. Project saved, check it manually in VSCode."
         except Exception as e:
             log(f"Fix step failed: {e}")
 
@@ -603,7 +601,6 @@ def _build_project(
         f"I couldn't fully fix '{proj_name}' after {MAX_FIX_ATTEMPTS} attempts. "
         f"Project is saved at {project_dir} — open it in VSCode and check manually."
     )
-    if speak: speak(msg)
     return f"{msg}\n\nLast error:\n{last_output[:600]}"
 
 
