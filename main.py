@@ -767,6 +767,22 @@ class JarvisLive:
                     )
                 )
             ),
+            # Both left at SDK defaults until now -- same class of fix already
+            # measured for web_search (core/config.py's CLAUDE_FAST_MODEL):
+            # less "thinking" before responding, and less silence required
+            # before the server decides the user is done talking. Unlike
+            # web_search this can't be measured against a live mic in this
+            # environment -- only that the session still connects cleanly
+            # with these set. Watch for: (a) worse tool-call accuracy on
+            # ambiguous requests from thinking_budget=0, (b) JARVIS cutting
+            # in before you've finished a sentence from a too-low
+            # silence_duration_ms. Revert either independently if so.
+            thinking_config=types.ThinkingConfig(thinking_budget=0),
+            realtime_input_config=types.RealtimeInputConfig(
+                automatic_activity_detection=types.AutomaticActivityDetection(
+                    silence_duration_ms=500,
+                )
+            ),
         )
 
     async def _execute_tool(self, fc) -> types.FunctionResponse:
