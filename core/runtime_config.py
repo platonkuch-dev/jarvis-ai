@@ -69,7 +69,7 @@ def get_anthropic_workspace_id() -> str:
     return get_config().get("anthropic_workspace_id", "")
 
 
-def build_anthropic_client():
+def build_anthropic_client(**extra):
     """Constructs an `anthropic.Anthropic` client with the correct header
     for an identity-linked API key. Anthropic API keys minted for a specific
     workspace (as opposed to a standard account-level key) reject requests
@@ -80,9 +80,10 @@ def build_anthropic_client():
     fell back to Gemini instead of surfacing the failure. ~12 call sites
     across actions/*.py independently constructed `anthropic.Anthropic(
     api_key=...)` with no header, all carrying the same latent bug — use
-    this instead of constructing the client directly."""
+    this instead of constructing the client directly. `**extra` (e.g.
+    `timeout=...`) is passed straight through to `anthropic.Anthropic`."""
     import anthropic
-    kwargs: dict = {"api_key": get_claude_api_key()}
+    kwargs: dict = {"api_key": get_claude_api_key(), **extra}
     workspace_id = get_anthropic_workspace_id()
     if workspace_id:
         kwargs["default_headers"] = {"anthropic-workspace-id": workspace_id}

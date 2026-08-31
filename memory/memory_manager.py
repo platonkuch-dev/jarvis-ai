@@ -6,7 +6,7 @@ from pathlib import Path
 
 from core.path_utils import get_memory_path
 from core.config import CLAUDE_MODEL, MEMORY_MAX_CHARS, MEMORY_MAX_VALUE_LEN as MAX_VALUE_LENGTH
-from core.runtime_config import get_claude_api_key as _get_claude_key
+from core.runtime_config import get_claude_api_key as _get_claude_key, build_anthropic_client as _build_anthropic_client
 
 
 MEMORY_PATH      = get_memory_path()
@@ -89,8 +89,7 @@ Current memory:
 Return ONLY the consolidated memory as valid JSON, same schema — no markdown, no explanation."""
 
     try:
-        import anthropic
-        client = anthropic.Anthropic(api_key=claude_key)
+        client = _build_anthropic_client()
         msg = client.messages.create(
             model=CLAUDE_MODEL,
             max_tokens=2048,

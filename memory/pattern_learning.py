@@ -17,7 +17,7 @@ from datetime import datetime
 
 from core.path_utils import get_user_data_dir
 from core.config import CLAUDE_MODEL, PATTERN_ANALYZE_EVERY as ANALYZE_EVERY, PATTERN_MAX_LOG_LINES as MAX_LOG_LINES
-from core.runtime_config import get_claude_api_key as _get_claude_key
+from core.runtime_config import get_claude_api_key as _get_claude_key, build_anthropic_client as _build_anthropic_client
 from memory.memory_manager import update_memory
 
 LOG_PATH      = get_user_data_dir() / "usage_log.jsonl"
@@ -85,8 +85,7 @@ Log:
 Return ONLY a JSON object: {{"short_snake_case_key": "one-sentence pattern description", ...}}
 No markdown, no explanation."""
 
-        import anthropic
-        client = anthropic.Anthropic(api_key=claude_key)
+        client = _build_anthropic_client()
         msg = client.messages.create(
             model=CLAUDE_MODEL,
             max_tokens=1024,

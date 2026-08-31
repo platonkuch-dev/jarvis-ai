@@ -20,7 +20,11 @@ import io
 import re
 
 from core.config import CLAUDE_MODEL, GEMINI_LITE_MODEL
-from core.runtime_config import get_gemini_api_key as _get_gemini_key, get_claude_api_key as _get_claude_key
+from core.runtime_config import (
+    get_gemini_api_key as _get_gemini_key,
+    get_claude_api_key as _get_claude_key,
+    build_anthropic_client as _build_anthropic_client,
+)
 
 # Vision fallback is a synchronous step inside a live voice tool call --
 # the SDK defaults (Anthropic: 10 minutes; Gemini: no cap) would leave
@@ -52,13 +56,11 @@ def capture(region: tuple[int, int, int, int] | None = None) -> tuple[bytes, tup
 
 
 def _locate_with_claude(image_bytes: bytes, prompt: str) -> str | None:
-    claude_key = _get_claude_key()
-    if not claude_key:
+    if not _get_claude_key():
         return None
     import base64
-    import anthropic
 
-    client = anthropic.Anthropic(api_key=claude_key, timeout=_VISION_TIMEOUT_S)
+    client = _build_anthropic_client(timeout=_VISION_TIMEOUT_S)
     msg = client.messages.create(
         model=CLAUDE_MODEL,
         max_tokens=64,
