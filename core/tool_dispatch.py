@@ -47,7 +47,15 @@ from actions.window_control    import window_manager, ui_automation, launch_and_
 async def execute_tool(self, fc) -> types.FunctionResponse:
         name = fc.name
         args = dict(fc.args or {})
-        confirmed = bool(args.pop("confirmed", False))
+        # Peek, don't pop: actions/computer_settings.py already has its own
+        # independent confirmed=yes check for restart/shutdown (predates this
+        # registry) -- popping the key here would make it invisible to that
+        # handler, so a confirmed retry would pass THIS gate but then hit
+        # computer_settings.py's own check with an empty confirmed value and
+        # ask again, forever. Leaving it in `args` makes computer_settings.py's
+        # check a harmless redundant one instead of a broken dead end. Every
+        # other handler already ignores parameters it doesn't recognize.
+        confirmed = bool(args.get("confirmed", False))
         _t_start = time.monotonic()
 
         print(f"[JARVIS] 🔧 {name}  {args}")

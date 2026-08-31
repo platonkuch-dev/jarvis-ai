@@ -22,6 +22,11 @@ import re
 from core.config import CLAUDE_MODEL, GEMINI_LITE_MODEL
 from core.runtime_config import get_gemini_api_key as _get_gemini_key, get_claude_api_key as _get_claude_key
 
+# Vision fallback is a synchronous step inside a live voice tool call --
+# the SDK defaults (Anthropic: 10 minutes; Gemini: no cap) would leave
+# JARVIS hung with no user-facing feedback on a slow/unresponsive API.
+_VISION_TIMEOUT_S = 20.0
+
 try:
     import pyautogui
     _PYAUTOGUI = True
@@ -53,7 +58,7 @@ def _locate_with_claude(image_bytes: bytes, prompt: str) -> str | None:
     import base64
     import anthropic
 
-    client = anthropic.Anthropic(api_key=claude_key)
+    client = anthropic.Anthropic(api_key=claude_key, timeout=_VISION_TIMEOUT_S)
     msg = client.messages.create(
         model=CLAUDE_MODEL,
         max_tokens=64,
@@ -78,7 +83,10 @@ def _locate_with_gemini(image_bytes: bytes, prompt: str) -> str | None:
     from google import genai
     from google.genai import types as gtypes
 
-    client = genai.Client(api_key=api_key)
+    client = genai.Client(
+        api_key=api_key,
+        http_options=gtypes.HttpOptions(timeout=int(_VISION_TIMEOUT_S * 1000)),
+    )
     response = client.models.generate_content(
         model=GEMINI_LITE_MODEL,
         contents=[gtypes.Part.from_bytes(data=image_bytes, mime_type="image/png"), prompt],
