@@ -7,7 +7,7 @@ import subprocess
 import platform
 from pathlib import Path
 
-from core.config import CLAUDE_MODEL
+from core.config import CLAUDE_FAST_MODEL
 from core.runtime_config import get_config as _get_config, build_anthropic_client as _build_anthropic_client
 
 try:
@@ -642,7 +642,7 @@ Rules:
         try:
             _client = _build_anthropic_client()
             msg = _client.messages.create(
-                model=CLAUDE_MODEL, max_tokens=256,
+                model=CLAUDE_FAST_MODEL, max_tokens=256,
                 messages=[{"role": "user", "content": prompt}],
             )
             text = msg.content[0].text

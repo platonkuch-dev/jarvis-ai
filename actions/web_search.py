@@ -1,7 +1,7 @@
 #web_search.py
 from pathlib import Path
 
-from core.config import CLAUDE_MODEL
+from core.config import CLAUDE_FAST_MODEL
 from core.runtime_config import get_config as _get_config, build_anthropic_client as _build_anthropic_client
 
 CLAUDE_TAG      = "[CLAUDE_ANSWERED]"
@@ -40,7 +40,7 @@ def _claude_search(query: str) -> str:
     """Web-grounded answer via Claude's native web search tool."""
     client = _build_anthropic_client()
     msg = client.messages.create(
-        model=CLAUDE_MODEL,
+        model=CLAUDE_FAST_MODEL,
         max_tokens=2048,
         tools=[{"type": "web_search_20250305", "name": "web_search"}],
         messages=[{"role": "user", "content": query}],
