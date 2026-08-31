@@ -275,9 +275,26 @@ TOOL_DECLARATIONS = [
         "parameters": {
             "type": "OBJECT",
             "properties": {
-                "action":      {"type": "STRING", "description": "The action to perform"},
-                "description": {"type": "STRING", "description": "Natural language description of what to do"},
-                "value":       {"type": "STRING", "description": "Optional value: volume level, text to type, etc."}
+                "action": {
+                    "type": "STRING",
+                    "description": (
+                        "One of: brightness_down | brightness_up | close_app | close_tab | "
+                        "close_window | copy | cut | dark_mode | enter | escape | file_explorer | "
+                        "find_on_page | focus_search | full_screen | fullscreen | go_back | "
+                        "go_forward | lock_screen | maximize | minimize | mute | new_tab | "
+                        "next_tab | open_run | open_settings | page_down | page_up | paste | "
+                        "pause_video | play_pause | press_key | prev_tab | redo | refresh_page | "
+                        "reload | reload_n | restart | save | screen_off | screenshot | "
+                        "scroll_bottom | scroll_down | scroll_top | scroll_up | select_all | "
+                        "show_desktop | shutdown | sleep_display | snap_left | snap_right | "
+                        "switch_window | task_manager | toggle_mute | toggle_wifi | type_text | "
+                        "undo | unmute | volume_down | volume_set | volume_up | zoom_in | "
+                        "zoom_out | zoom_reset. If truly unsure which one applies, omit 'action' "
+                        "and pass 'description' instead — a fuzzy matcher picks the closest one."
+                    ),
+                },
+                "description": {"type": "STRING", "description": "Natural language description of what to do — used to pick 'action' when you didn't pass one, or to correct it if it doesn't match the list above"},
+                "value":       {"type": "STRING", "description": "Optional value: volume level (0-100 for volume_set), text to type (type_text), key name (press_key), reload count (reload_n)"}
             },
             "required": []
         }

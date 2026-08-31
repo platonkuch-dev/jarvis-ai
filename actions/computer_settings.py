@@ -9,6 +9,7 @@ from pathlib import Path
 
 from core.config import CLAUDE_FAST_MODEL
 from core.runtime_config import get_config as _get_config, build_anthropic_client as _build_anthropic_client
+from core import tool_registry as _tool_registry
 
 try:
     import pyautogui
@@ -609,14 +610,19 @@ ACTION_MAP: dict[str, callable] = {
     "shutdown":            shutdown_computer,
 }
 
-_DANGEROUS_ACTIONS = {"restart", "shutdown"}
+
+# Special-cased actions handled directly in computer_settings() below,
+# outside ACTION_MAP -- kept in one place so _detect_action's available-
+# actions list and the "is this action even real" check below can't drift
+# out of sync with each other again.
+_SPECIAL_ACTIONS = {"volume_set", "type_text", "press_key", "reload_n"}
+_KNOWN_ACTIONS   = set(ACTION_MAP.keys()) | _SPECIAL_ACTIONS
 
 
 
 def _detect_action(description: str) -> dict:
 
-    available = ", ".join(sorted(ACTION_MAP.keys())) + \
-                ", volume_set, type_text, press_key, reload_n"
+    available = ", ".join(sorted(_KNOWN_ACTIONS))
 
     prompt = f"""You are an intent detector for a computer control assistant.
 
@@ -680,13 +686,22 @@ def computer_settings(
     description = params.get("description", "").strip()
     value       = params.get("value", None)
 
-    if not raw_action and description:
-        detected   = _detect_action(description)
+    action = raw_action.lower().strip().replace(" ", "_").replace("-", "_")
+
+    # Fall back to the fuzzy intent detector not just when Gemini omitted
+    # 'action' entirely, but also when it guessed one that doesn't actually
+    # exist (e.g. 'set_volume' or 'decrease_volume' for what should be
+    # 'volume_set'/'volume_down') -- the tool schema in main.py's
+    # TOOL_DECLARATIONS now lists every real action, so this should be rare,
+    # but a self-correcting fallback here means a leftover bad guess costs
+    # one extra round trip instead of a dead "Unknown action" the user has
+    # to notice and repeat themselves over.
+    if action not in _KNOWN_ACTIONS and (description or raw_action):
+        detected   = _detect_action(description or raw_action)
         raw_action = detected.get("action", "")
+        action     = raw_action.lower().strip().replace(" ", "_").replace("-", "_")
         if value is None:
             value = detected.get("value")
-
-    action = raw_action.lower().strip().replace(" ", "_").replace("-", "_")
 
     if not action:
         return "No action could be determined."
@@ -695,13 +710,21 @@ def computer_settings(
     if player:
         player.write_log(f"[Settings] {action}")
 
-    if action in _DANGEROUS_ACTIONS:
-        confirmed = str(params.get("confirmed", "")).lower()
-        if confirmed not in ("yes", "true", "1", "confirm"):
-            return (
-                f"This will {action} the computer. "
-                f"Please confirm by calling again with confirmed=yes."
-            )
+    # Redundant, deliberately: core/tool_dispatch.py's outer gate already
+    # checks the RAW action Gemini sent against this same risk table before
+    # ever calling this function -- but that's a fast exact-string match. The
+    # fuzzy-correction step above can turn a misspelled/synonym action
+    # (which the outer gate wouldn't recognize as gated, e.g. 'disable_wifi'
+    # for 'toggle_wifi') into a real SENSITIVE/DANGEROUS one; without this
+    # second check here, that corrected action would execute with no
+    # confirmation ever asked. This also closes AUDIT.md #13's asymmetry
+    # (toggle_wifi/dark_mode/lock_screen/sleep_display had no inner check of
+    # their own, unlike restart/shutdown's old dedicated one this replaces).
+    _risk = _tool_registry.resolve_risk("computer_settings", {"action": action})
+    if _risk in _tool_registry.GATED_LEVELS:
+        confirmed = str(params.get("confirmed", "")).lower() in ("yes", "true", "1", "confirm")
+        if not confirmed:
+            return _tool_registry.confirmation_prompt("computer_settings", {"action": action}, _risk)
 
     if action == "volume_set":
         try:

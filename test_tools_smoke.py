@@ -287,6 +287,29 @@ try:
 except Exception as e:
     check(f"computer_settings confirmed=true round-trip (exception: {e})", False)
 
+# Regression guard for a gap found live in production: main.py's TOOL_DECLARATIONS
+# gave computer_settings' 'action' param no enumerated values at all, so Gemini
+# had to guess exact action strings blind -- confirmed live as repeated
+# "Unknown action" round trips ('set_volume', 'volume', 'decrease_volume', none
+# of them real). actions/computer_settings.py now self-corrects an unrecognized
+# action via its fuzzy _detect_action() fallback -- but the fuzzy match runs
+# INSIDE this function, after core/tool_dispatch.py's outer risk gate already
+# looked at (and, for a misspelling, waved through) the ORIGINAL unrecognized
+# string. A misspelled SENSITIVE/DANGEROUS action must still be gated once
+# fuzzy-corrected, or it would execute with no confirmation ever asked --
+# this calls computer_settings() directly (bypassing the outer gate on
+# purpose, same as check_real does) to prove the INNER gate alone catches it.
+try:
+    _fuzzy_result = call("computer_settings", {"action": "turn_off_wifi", "description": "turn off the wifi"})
+    check(
+        "computer_settings fuzzy-corrects an unrecognized SENSITIVE-sounding action "
+        "and still gates it (regression guard: the inner gate must re-check the "
+        "CORRECTED action, not just trust whatever Gemini originally sent)",
+        "[CONFIRMATION_REQUIRED]" in _fuzzy_result,
+    )
+except Exception as e:
+    check(f"computer_settings fuzzy-correction gating (exception: {e})", False)
+
 # ── Explicitly skipped: SAFE/NORMAL but too heavy/side-effecting for a routine smoke run ──
 
 skip("open_app", "opens a real, visible window every run (AUDIT.md tested this manually instead)")
