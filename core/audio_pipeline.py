@@ -18,12 +18,36 @@ from datetime import datetime
 
 import sounddevice as sd
 
+from core import latency
 from core.session import clean_transcript as _clean_transcript
 
 CHANNELS            = 1
 SEND_SAMPLE_RATE    = 16000
 RECEIVE_SAMPLE_RATE = 24000
 CHUNK_SIZE          = 1024
+
+
+def _mark_response_started(self) -> None:
+    """Call on the first evidence of ANY model activity in a turn (first
+    audio byte, first output_transcription chunk, or a tool_call) to time
+    the one leg of the round trip core/latency.py's own docstring calls
+    "server-side and opaque": Gemini's own STT+reasoning+TTS-start time.
+    Two independent gaps, since either can be pending at once -- a plain
+    conversational turn (or the turn where Gemini decides to call a tool)
+    measures from the user's last heard word; a turn continuing after a
+    tool's function_response measures from when that response was sent.
+    Idempotent per turn: each flag only fires once until its corresponding
+    "start waiting" event (new user speech / a fresh send_tool_response)
+    happens again, so a multi-chunk response doesn't re-record itself.
+    """
+    now = time.monotonic()
+    if not self._turn_measured:
+        latency.record("smart_path_first_signal", (now - self._last_user_speech) * 1000)
+        self._turn_measured = True
+    if not self._tool_reaction_measured and self._tool_response_sent_at is not None:
+        latency.record("smart_path_tool_reaction", (now - self._tool_response_sent_at) * 1000)
+        self._tool_reaction_measured = True
+        self._tool_response_sent_at = None
 
 
 async def send_realtime(self):
@@ -88,6 +112,7 @@ async def receive_audio(self):
                     if self._interrupted:
                         pass  # discard: interrupted
                     else:
+                        _mark_response_started(self)
                         if self._turn_done_event and self._turn_done_event.is_set():
                             self._turn_done_event.clear()
                         # Split into ~50 ms chunks so interrupt() stops audio within 50 ms
@@ -111,6 +136,7 @@ async def receive_audio(self):
                         self.interrupt()
 
                     if sc.output_transcription and sc.output_transcription.text:
+                        _mark_response_started(self)
                         txt = _clean_transcript(sc.output_transcription.text)
                         if txt and txt != (out_buf[-1] if out_buf else ""):
                             out_buf.append(txt)
@@ -120,6 +146,7 @@ async def receive_audio(self):
                         if txt:
                             in_buf.append(txt)
                             self._last_user_speech = time.monotonic()
+                            self._turn_measured    = False
 
                     if sc.turn_complete:
                         if self._turn_done_event:
@@ -208,6 +235,7 @@ async def receive_audio(self):
                             asyncio.create_task(_cam_close())
 
                 if response.tool_call:
+                    _mark_response_started(self)
                     fn_responses = []
                     for fc in response.tool_call.function_calls:
                         print(f"[JARVIS] 📞 {fc.name}")
@@ -216,6 +244,8 @@ async def receive_audio(self):
                     await self.session.send_tool_response(
                         function_responses=fn_responses
                     )
+                    self._tool_response_sent_at  = time.monotonic()
+                    self._tool_reaction_measured = False
     except Exception as e:
         print(f"[JARVIS] ❌ Recv: {e}")
         traceback.print_exc()

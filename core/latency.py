@@ -1,14 +1,23 @@
 """
-Lightweight latency profiler for tool execution.
+Lightweight latency profiler for tool execution AND the Gemini Live
+round trip around it.
 
-JARVIS's voice pipeline (STT/reasoning/TTS) runs entirely inside Gemini
-Live's single audio session — there's no local wake-word/STT/TTS stage to
-instrument separately, that's all server-side and opaque to this codebase.
-What IS measurable and actually under our control is everything AFTER
-Gemini decides to call a tool: dispatch + the tool's own execution time.
-That's what this module tracks, per call, plus a rolling per-tool-name
-summary so "what's actually slow" is visible from the logs instead of
-guessed at.
+Most of what this module tracks is dispatch + a tool's own execution time
+under names like "web_search" or "window_manager" -- everything AFTER
+Gemini decides to call a tool, fully within this codebase's control.
+
+Gemini Live's own STT+reasoning+TTS-start time has no discrete
+request/response boundary to hook (it's one continuous full-duplex audio
+session, not a call-and-wait API), so it can't be broken down into STT vs.
+reasoning vs. TTS -- but the aggregate CAN be timed from outside, by
+comparing timestamps of events this codebase already receives: the last
+input_transcription chunk before a turn, and the first sign of a reply
+(audio byte / output_transcription / tool_call). See
+core/audio_pipeline.py's _mark_response_started(), which records that gap
+under "smart_path_first_signal" (plain conversational turn, or the turn
+where Gemini decides to call a tool) and "smart_path_tool_reaction" (from
+send_tool_response() to Gemini's next reply signal) -- both land in the
+same per-name rolling summary below as any tool name.
 """
 from __future__ import annotations
 

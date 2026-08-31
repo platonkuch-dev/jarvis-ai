@@ -638,6 +638,15 @@ class JarvisLive:
         self._vision_last_time     = 0.0     # monotonic time of last screen_process call (cooldown guard)
         self._vision_busy          = False   # True while a vision capture/inject cycle is in flight
         self._interrupted          = False   # True while draining audio after user interrupt
+        # Round-trip latency instrumentation (see core/audio_pipeline.py's
+        # _mark_response_started) -- core/latency.py only ever measured tool
+        # execution time; these two flags let it also measure the one leg
+        # that's otherwise invisible: Gemini's own STT+reasoning+TTS-start
+        # time, both for a plain conversational turn and for its reaction
+        # after a tool's function_response comes back.
+        self._turn_measured          = True   # False from new user speech until the model's first reply signal
+        self._tool_reaction_measured = True   # False from send_tool_response() until the model's first reply signal
+        self._tool_response_sent_at: float | None = None
         self.ui.on_text_command   = self._on_text_command
         self.ui.on_remote_clicked = self._make_remote_key
         self.ui.on_interrupt      = self.interrupt
@@ -965,6 +974,9 @@ class JarvisLive:
                     self._vision_busy          = False
                     self._vision_last_time     = 0.0
                     self._interrupted          = False
+                    self._turn_measured          = True
+                    self._tool_reaction_measured = True
+                    self._tool_response_sent_at  = None
                     with self._fast_path_lock:
                         self._fast_path_state = "idle"
                     self._fast_path_queue = None  # _run_fast_path() recreates it on (re)start
