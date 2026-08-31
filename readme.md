@@ -26,12 +26,11 @@ It's not just an assistant — it's an extension of your digital life.
 | 👁️ Visual Awareness | Real-time screen capture and webcam vision piped into your main Gemini session |
 | 🧠 Persistent Memory | Deeply remembers projects, preferences, and personal context across sessions |
 | ⌨️ Hybrid Input | Seamlessly switch between keyboard typing and voice commands |
-| 🌅 Morning Briefing | On first boot: greets you, reads the time, fetches live news headlines, and checks weather |
 | 🔔 Proactive Check-ins | After 15 minutes of silence JARVIS checks context and offers something genuinely useful — no hardcoded rules, Gemini decides |
 | 📊 Hardware Monitoring | Continuous CPU, RAM, GPU and temperature telemetry with localized voice alerts when thresholds are breached |
 | 🌤️ Weather Report | Live weather data for your city, personalized from memory |
 | 🗺️ Dynamic Content Panel | Scrollable display layer beneath the HUD that renders web results, news, and search data with timestamps |
-| 🔍 Multi-Mode Web Search | `news` / `research` / `price` / `compare` / `search` — Gemini Grounded first, DDG fallback |
+| 🔍 Multi-Mode Web Search | `news` / `research` / `price` / `compare` / `search` — Claude-first grounded search, Gemini fallback, DDG last resort |
 | ⏰ Smart Reminders | OS-native scheduled notifications (Windows Task Scheduler / macOS LaunchAgent / Linux systemd) |
 | ✈️ Flight Finder | Live flight price and availability lookup |
 | 🎮 Game Updater | Checks and triggers game updates on demand |
@@ -54,13 +53,10 @@ Press **Escape** or click the `INTERRUPT` button to cut JARVIS off mid-sentence 
 When you ask JARVIS to look at your screen or camera, it no longer goes silent while processing. The tool now instructs Gemini to immediately say a natural sentence ("Looking at your screen now, sir" / "Ekrana bakıyorum efendim") while the image capture runs. The actual analysis follows as a second response. No more awkward silence.
 
 ### 📰 Parallel News Search — First Result Wins
-News queries now run **Gemini Grounded Search and DuckDuckGo news simultaneously** in two daemon threads. Whichever delivers a valid result first wins; the other is silently discarded. Previously, a Gemini 503 error would stall the search for several seconds before falling back to DDG. Now the fallback happens in parallel — total news fetch time drops to whichever backend is fastest at that moment.
+News queries now run **Claude-first grounded search (Gemini fallback) and DuckDuckGo news simultaneously** in two daemon threads. Whichever delivers a valid result first wins; the other is silently discarded. Previously, a grounded-search error would stall the search for several seconds before falling back to DDG. Now the fallback happens in parallel — total news fetch time drops to whichever backend is fastest at that moment.
 
 ### 🗞️ Real News Articles (Not Homepages)
 DDG news search was previously using `ddgs.text()`, which returned website homepage URLs for news queries. Mark XLVIII switches to `ddgs.news()`, which returns actual article URLs, titles, snippets, and source names — exactly what you want in a news briefing.
-
-### 🌅 Two-Phase Startup Briefing — Runs Concurrently
-The startup briefing now sends Phase 2 (news fetch) while Phase 1 audio (the greeting) is still playing. Previously, Phase 2 waited for Phase 1 to fully complete. The 1.5-second overlap means the news headline is ready by the time JARVIS finishes saying "Good morning."
 
 ### 🔁 Smarter Reconnection — Exponential Backoff
 Network timeouts now use exponential backoff: 3s → 6s → 12s → 60s (capped). Each retry shows a Turkish-language status message in the UI ("Bağlantı kurulamadı — Xs sonra tekrar deneniyor"). Previously, a dropped connection would loop tightly and show no useful information.
