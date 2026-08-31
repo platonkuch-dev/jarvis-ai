@@ -11,6 +11,8 @@ import threading
 from pathlib import Path
 from typing import Optional
 
+import psutil
+
 from playwright.async_api import (
     async_playwright,
     BrowserContext,
@@ -55,6 +57,45 @@ def _user_agent() -> str:
         "AppleWebKit/537.36 (KHTML, like Gecko) "
         "Chrome/124.0.0.0 Safari/537.36"
     )
+
+
+_BROWSER_PROCESS_NAMES: dict[str, dict[str, str]] = {
+    "chrome":   {"Windows": "chrome.exe",   "Darwin": "Google Chrome",  "Linux": "chrome"},
+    "edge":     {"Windows": "msedge.exe",   "Darwin": "Microsoft Edge", "Linux": "msedge"},
+    "brave":    {"Windows": "brave.exe",    "Darwin": "Brave Browser",  "Linux": "brave"},
+    "vivaldi":  {"Windows": "vivaldi.exe",  "Darwin": "Vivaldi",        "Linux": "vivaldi"},
+    "opera":    {"Windows": "opera.exe",    "Darwin": "Opera",          "Linux": "opera"},
+    "operagx":  {"Windows": "opera_gx.exe", "Darwin": "Opera GX",       "Linux": "opera-gx"},
+    "firefox":  {"Windows": "firefox.exe",  "Darwin": "firefox",        "Linux": "firefox"},
+}
+
+
+def _browser_is_running(browser: str) -> bool:
+    """True if the target browser already has a live process.
+
+    If so, its real profile directory is locked (Chromium's SingletonLock,
+    or the equivalent for Firefox-family browsers) and
+    launch_persistent_context() against it is guaranteed to fail, not just
+    likely to -- a second Chromium process pointed at an in-use profile
+    dir gets silently forwarded to the already-running instance and exits,
+    which Playwright sees as "Target page, context or browser has been
+    closed". Measured live: ~18s wasted per browser_control call reaching
+    that failure before falling back to the separate JARVIS profile that
+    actually works. Checking first skips straight to the profile that will
+    succeed, while still trying the real one (for the user's actual
+    bookmarks/logins) on the rarer occasion the browser isn't already open.
+    """
+    proc_name = _BROWSER_PROCESS_NAMES.get(browser, {}).get(_OS)
+    if not proc_name:
+        return False
+    target = proc_name.lower()
+    for p in psutil.process_iter(["name"]):
+        try:
+            if (p.info.get("name") or "").lower() == target:
+                return True
+        except (psutil.NoSuchProcess, psutil.AccessDenied):
+            continue
+    return False
 
 
 def _real_profile_dir(browser: str) -> str:
@@ -436,13 +477,19 @@ class _BrowserSession:
             }
             if exe:
                 kwargs["executable_path"] = exe
-            try:
-                self._context = await engine_obj.launch_persistent_context(profile, **kwargs)
-            except Exception as e:
-                print(f"[Browser] Firefox real profile failed ({e}), using JARVIS profile")
+            if _browser_is_running("firefox"):
+                print("[Browser] Firefox is already running — real profile is locked, skipping straight to JARVIS profile")
                 jarvis = str(Path.home() / ".jarvis_profiles" / "firefox_jarvis")
                 Path(jarvis).mkdir(parents=True, exist_ok=True)
                 self._context = await engine_obj.launch_persistent_context(jarvis, **kwargs)
+            else:
+                try:
+                    self._context = await engine_obj.launch_persistent_context(profile, **kwargs)
+                except Exception as e:
+                    print(f"[Browser] Firefox real profile failed ({e}), using JARVIS profile")
+                    jarvis = str(Path.home() / ".jarvis_profiles" / "firefox_jarvis")
+                    Path(jarvis).mkdir(parents=True, exist_ok=True)
+                    self._context = await engine_obj.launch_persistent_context(jarvis, **kwargs)
 
             await asyncio.sleep(0.5)  
             self._page = await self._context.new_page()
@@ -491,14 +538,17 @@ class _BrowserSession:
             + (f" @ {exe}" if exe else "")
         )
 
-        try:
-            self._context = await engine_obj.launch_persistent_context(profile, **kwargs)
-            await asyncio.sleep(0.5) 
-            self._page = await self._context.new_page()
-            print(f"[Browser] ✅ Launched [{label}] profile={profile}")
-            return
-        except Exception as e:
-            print(f"[Browser] ⚠️  Real profile failed for {label}: {e}")
+        if _browser_is_running(self.browser_name):
+            print(f"[Browser] {label} is already running — real profile is locked, skipping straight to JARVIS profile")
+        else:
+            try:
+                self._context = await engine_obj.launch_persistent_context(profile, **kwargs)
+                await asyncio.sleep(0.5)
+                self._page = await self._context.new_page()
+                print(f"[Browser] ✅ Launched [{label}] profile={profile}")
+                return
+            except Exception as e:
+                print(f"[Browser] ⚠️  Real profile failed for {label}: {e}")
 
         jarvis_profile = str(Path.home() / ".jarvis_profiles" / self.browser_name)
         Path(jarvis_profile).mkdir(parents=True, exist_ok=True)
