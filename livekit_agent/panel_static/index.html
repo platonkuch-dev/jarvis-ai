@@ -444,7 +444,24 @@ function telegramFlow(save, outerMsg) {
   };
   return h("div", { class: "tg-flow" },
     h("div", { class: "field" }, h("label", { for: "tg-phone" }, "Вход в аккаунт Джарвиса (нужен один раз)"), phone),
-    code, pass, h("div", { class: "row", style: "margin:0" }, send, confirm), msg);
+    code, pass, h("div", { class: "row", style: "margin:0" }, send, confirm), msg, telegramOwner());
+}
+
+function telegramOwner() {
+  const box = h("div", { class: "field" });
+  const render = r => {
+    const reset = h("button", { class: "btn", type: "button" }, r.owner ? "Сменить владельца" : "Новый код");
+    reset.onclick = async () => {
+      if (r.owner && !confirm("Забыть текущего владельца? Он потеряет доступ, пока не пришлёт новый код.")) return;
+      try { render(await api("/api/telegram/owner/reset", { method: "POST" })); } catch (e) { toast(e.message); }
+    };
+    const text = r.owner
+      ? "Владелец: " + r.owner + ". Только он может давать поручения и получает уведомления."
+      : "Владелец ещё не назначен. Отправьте аккаунту Джарвиса со своего Telegram код " + r.code + " — так он узнает вас. Код одноразовый.";
+    box.replaceChildren(h("label", {}, "Владелец в Telegram"), h("small", {}, text), h("div", { class: "row", style: "margin:6px 0 0" }, reset));
+  };
+  api("/api/telegram/owner").then(render).catch(() => {});
+  return box;
 }
 
 async function act(path) {

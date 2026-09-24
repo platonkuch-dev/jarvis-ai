@@ -1,9 +1,8 @@
 """Local calendar/todo/reminder/timer tools.
 
 Everything here is a flat JSON file next to the agent -- there is no real
-calendar integration. Reminders and timers are announced with a spoken
-`session.say()` when they fire, but only while this worker process is
-running (see README "Known limitations").
+calendar integration. Reminders and timers are persisted and
+fired by `reminder_loop()` (see below), so they survive restarts.
 """
 
 from __future__ import annotations
@@ -11,7 +10,7 @@ from __future__ import annotations
 import asyncio
 import time
 import uuid
-from datetime import datetime
+from datetime import datetime, timedelta
 
 from livekit.agents import RunContext, function_tool
 
@@ -124,14 +123,73 @@ async def get_schedule(context: RunContext, date_str: str) -> str:
 # ---------------------------------------------------------------------------
 
 
-async def _reminder_waiter(reminder_id: str, delay_seconds: float, text: str) -> None:
-    await asyncio.sleep(delay_seconds)
-    await runtime.say(f"Напоминание: {text}")
+# Reminders and timers are only records in REMINDERS_FILE; nothing waits on
+# them in memory. `reminder_loop()` (started once by the voice worker in
+# console mode) polls the file and fires whatever is due. So a reminder
+# survives a crash/restart, and one created from another process (the
+# Telegram bridge, a background task) still fires in the voice worker.
 
-    def _mutate(data: list) -> tuple[list, None]:
-        return [r for r in data if r.get("id") != reminder_id], None
+_POLL_S = 5.0
+# Fired this late (PC was off/asleep, worker was down) -> say so explicitly.
+_LATE_S = 120.0
 
-    await _reminders_store.mutate(_mutate)
+
+async def _add_reminder(text: str, when: datetime, kind: str) -> dict:
+    reminder = {"id": uuid.uuid4().hex[:8], "text": text, "at": when.isoformat(), "kind": kind}
+
+    def _mutate(data: list) -> tuple[list, dict]:
+        data.append(reminder)
+        return data, reminder
+
+    return await _reminders_store.mutate(_mutate)
+
+
+async def take_due_reminders(now: datetime | None = None) -> list[dict]:
+    """Removes and returns every reminder whose time has come."""
+    now = now or datetime.now()
+
+    def _mutate(data: list) -> tuple[list, list]:
+        due, keep = [], []
+        for r in data:
+            try:
+                (due if datetime.fromisoformat(r["at"]) <= now else keep).append(r)
+            except (KeyError, ValueError):
+                continue  # malformed entry: drop it rather than crash the loop forever
+        return keep, due
+
+    return await _reminders_store.mutate(_mutate)
+
+
+def _announcement(reminder: dict, now: datetime) -> str:
+    at = datetime.fromisoformat(reminder["at"])
+    late = (now - at).total_seconds() > _LATE_S
+    if reminder.get("kind") == "timer":
+        text = f"Таймер {reminder.get('text') or ''} истёк.".replace("  ", " ")
+    else:
+        text = f"Напоминание: {reminder['text']}"
+    if late:
+        text = f"Пропущенное (было на {at.strftime('%d.%m %H:%M')}). {text}"
+    return text
+
+
+async def reminder_loop() -> None:
+    """Fires due reminders out loud; copies them to Telegram when nobody is
+    likely listening (no live session, or the agent is asleep)."""
+    import notify
+
+    while True:
+        try:
+            now = datetime.now()
+            for reminder in await take_due_reminders(now):
+                text = _announcement(reminder, now)
+                if not runtime.user_present():
+                    notify.notify_owner(f"⏰ {text}", kind="reminder")
+                await runtime.say(text)
+        except Exception:
+            import logging
+
+            logging.getLogger("jarvis-voice-agent.scheduling").exception("reminder loop tick failed")
+        await asyncio.sleep(_POLL_S)
 
 
 @register_impl("create_reminder")
@@ -140,20 +198,10 @@ async def _create_reminder(*, text: str, datetime_str: str) -> dict:
     when = _parse_datetime(datetime_str)
     if when is None:
         return {"status": "error", "message": f"Не смог разобрать дату/время «{datetime_str}»."}
-
-    delay = (when - datetime.now()).total_seconds()
-    if delay < 0:
+    if when < datetime.now():
         return {"status": "error", "message": "Указанное время уже в прошлом."}
 
-    reminder = {"id": uuid.uuid4().hex[:8], "text": text, "at": when.isoformat()}
-
-    def _mutate(data: list) -> tuple[list, dict]:
-        data.append(reminder)
-        return data, reminder
-
-    await _reminders_store.mutate(_mutate)
-    asyncio.create_task(_reminder_waiter(reminder["id"], delay, text))
-
+    reminder = await _add_reminder(text, when, "reminder")
     return {
         "status": "ok",
         "message": f"Напомню «{text}» в {when.strftime('%d.%m %H:%M')}.",
@@ -164,7 +212,8 @@ async def _create_reminder(*, text: str, datetime_str: str) -> dict:
 @register_tool
 @function_tool
 async def create_reminder(context: RunContext, text: str, datetime_str: str) -> str:
-    """Set a one-time spoken reminder for later (only while this agent process keeps running).
+    """Set a one-time reminder for later. Survives restarts; if the user is away
+    it is also sent to their Telegram.
 
     Args:
         text: What to remind the user about.
@@ -174,17 +223,12 @@ async def create_reminder(context: RunContext, text: str, datetime_str: str) -> 
     return result["message"]
 
 
-async def _timer_waiter(minutes: float) -> None:
-    await asyncio.sleep(minutes * 60)
-    await runtime.say(f"Таймер на {minutes:g} минут истёк.")
-
-
 @register_impl("set_timer")
 @log_call("set_timer")
-async def _set_timer(*, minutes: float) -> dict:
+async def _set_timer(*, minutes: float, label: str = "") -> dict:
     if minutes <= 0:
         return {"status": "error", "message": "Длительность таймера должна быть больше нуля."}
-    asyncio.create_task(_timer_waiter(minutes))
+    await _add_reminder(label or f"на {minutes:g} минут", datetime.now() + timedelta(minutes=minutes), "timer")
     return {"status": "ok", "message": f"Таймер на {minutes:g} минут запущен."}
 
 

@@ -10,17 +10,23 @@ from __future__ import annotations
 import asyncio
 import functools
 import json
+import os
 import time
 from collections.abc import Awaitable, Callable
 from typing import Any, TypeVar
 
-from config import TOOL_LOG_FILE
+from config import LOG_MAX_BYTES, TOOL_LOG_FILE
 
 _F = TypeVar("_F", bound=Callable[..., Awaitable[Any]])
 
 
 def _write(entry: dict[str, Any]) -> None:
     line = json.dumps(entry, ensure_ascii=False, default=str)
+    try:
+        if TOOL_LOG_FILE.stat().st_size > LOG_MAX_BYTES:
+            os.replace(TOOL_LOG_FILE, TOOL_LOG_FILE.with_suffix(TOOL_LOG_FILE.suffix + ".1"))
+    except OSError:
+        pass
     with open(TOOL_LOG_FILE, "a", encoding="utf-8") as f:
         f.write(line + "\n")
 

@@ -24,15 +24,21 @@ from livekit.agents import (
     WorkerOptions,
     cli,
 )
+from livekit import rtc
+from livekit.agents import llm
 from livekit.plugins import anthropic, deepgram, elevenlabs, openai as openai_plugin, silero
 
 import config
+import fast_path
 import hud_bridge
+import notify
 import prompts
+import usage
 from custom_tts import TTS as EdgeTTS
 from sleep_wake import SleepWakeController
 from tools import FUNCTION_TOOLS
 from tools import runtime as tool_runtime
+from tools import scheduling, tasks, triggers
 from tools.memory import load_memory
 
 load_dotenv()
@@ -45,14 +51,53 @@ logger = logging.getLogger("jarvis-voice-agent")
 IS_CONSOLE_MODE = "console" in sys.argv
 
 
+_RESTRICTED_CALLER_NOTE = """
+
+[Сейчас тебе звонит по телефону человек, чей номер НЕ в списке доверенных. У тебя в этом
+разговоре нет инструментов и нет доступа к компьютеру владельца: ничего не обещай сделать,
+не раскрывай никаких сведений о владельце и его жизни. Можно просто вежливо поговорить или
+предложить оставить сообщение — скажи, что передашь его владельцу.]
+"""
+
+
 class JarvisAgent(Agent):
-    def __init__(self, instructions: str) -> None:
-        super().__init__(instructions=instructions, tools=FUNCTION_TOOLS)
+    def __init__(self, instructions: str, *, restricted: bool = False) -> None:
+        super().__init__(instructions=instructions, tools=[] if restricted else FUNCTION_TOOLS)
+        # restricted: an untrusted phone caller -- no tools, and no local
+        # fast path either (it would run tools without the LLM).
+        self._restricted = restricted
 
     async def on_enter(self) -> None:
         self.session.generate_reply(
             instructions="Поздоровайся коротко и представься как голосовой помощник Джарвис."
         )
+
+    async def on_user_turn_completed(self, turn_ctx: llm.ChatContext, new_message: llm.ChatMessage) -> None:
+        """Handles the most common one-shot commands locally (fast_path.py),
+        skipping the LLM round trip entirely: no tokens, and the reply starts
+        about a second sooner."""
+        if self._restricted:
+            if new_message.text_content:
+                notify.notify_owner(f"📞 Звонящий не из списка сказал: {new_message.text_content[:500]}",
+                                    kind="phone")
+            return
+        text = new_message.text_content or ""
+        from tools import computer_use
+
+        intent = fast_path.parse(text, computer_use_running=computer_use._RUN_LOCK.locked())
+        if intent is None:
+            return
+        handled, reply = await fast_path.execute(intent)
+        if not handled:
+            return  # let the LLM take it from here, exactly as before
+        logger.info("fast path: %r -> %s", text, intent.tool or "local answer")
+        # Keep the exchange in the LLM's history so follow-ups ("а теперь
+        # громче") still make sense to it on the next, non-fast-path turn.
+        chat_ctx = self.chat_ctx.copy()
+        chat_ctx.add_message(role="user", content=text)
+        await self.update_chat_ctx(chat_ctx)
+        self.session.say(reply)
+        raise llm.StopResponse()
 
 
 def prewarm(proc: JobProcess) -> None:
@@ -150,6 +195,18 @@ async def entrypoint(ctx: JobContext) -> None:
         except Exception:
             logger.warning("could not build the Start Menu shortcut index", exc_info=True)
 
+    # Phone calls: only numbers in PHONE_ALLOWED_NUMBERS get tools. The
+    # caller has to be identified before the agent (and its tool list) exists.
+    restricted = False
+    if not IS_CONSOLE_MODE:
+        await ctx.connect()
+        participant = await ctx.wait_for_participant()
+        if participant.kind == rtc.ParticipantKind.PARTICIPANT_KIND_SIP:
+            caller = "".join(ch for ch in participant.attributes.get("sip.phoneNumber", "") if ch.isdigit())
+            restricted = not caller or caller not in config.PHONE_ALLOWED_NUMBERS
+            logger.info("phone call from %s -- %s", caller or "unknown number",
+                        "conversation only" if restricted else "trusted, full tools")
+
     session: AgentSession = AgentSession(
         stt=deepgram.STT(model=config.DEEPGRAM_MODEL, language=config.DEEPGRAM_LANGUAGE),
         llm=_build_llm(),
@@ -161,6 +218,17 @@ async def entrypoint(ctx: JobContext) -> None:
         logger.info("session usage: %s", session.usage)
 
     ctx.add_shutdown_callback(_log_usage)
+
+    @session.on("metrics_collected")
+    def _on_metrics(ev) -> None:
+        m = ev.metrics
+        if getattr(m, "type", None) == "llm_metrics":
+            # prompt_tokens already includes the cached part; split it back out
+            # so cache reads/writes are priced at their real (lower/higher) rates.
+            cached, written = m.prompt_cached_tokens or 0, getattr(m, "cache_creation_tokens", 0) or 0
+            model = config.OPENAI_MODEL if config.LLM_PROVIDER == "openai" else config.ANTHROPIC_MODEL
+            usage.record(model, max(0, m.prompt_tokens - cached - written), m.completion_tokens,
+                         cached, written, source="voice")
 
     hud_lines: list[dict[str, str]] = []
     sleep_wake = SleepWakeController(session, hud_lines) if IS_CONSOLE_MODE else None
@@ -190,10 +258,13 @@ async def entrypoint(ctx: JobContext) -> None:
         if role == "user":
             hud_bridge.write_state("thinking", hud_lines)
 
-    memory = await load_memory()
-    agent = JarvisAgent(prompts.build_instructions(memory))
+    if restricted:
+        agent = JarvisAgent(prompts.SYSTEM_PROMPT + _RESTRICTED_CALLER_NOTE, restricted=True)
+    else:
+        agent = JarvisAgent(prompts.build_instructions(await load_memory()))
 
-    await ctx.connect()
+    if IS_CONSOLE_MODE:
+        await ctx.connect()
     await session.start(agent=agent, room=ctx.room)
     hud_bridge.write_state("idle", hud_lines)
 
@@ -221,11 +292,28 @@ async def entrypoint(ctx: JobContext) -> None:
 
     if sleep_wake is not None:
         sleep_wake.start()
+        tool_runtime.set_presence_probe(lambda: not sleep_wake.asleep)
 
         async def _stop_sleep_wake() -> None:
             sleep_wake.stop()
 
         ctx.add_shutdown_callback(_stop_sleep_wake)
+
+    # The autonomy loops run only in the desktop worker (console mode): the
+    # phone worker is a second process on the same machine, and running them
+    # there too would fire every reminder/trigger/task twice.
+    if IS_CONSOLE_MODE:
+        background = [
+            asyncio.create_task(scheduling.reminder_loop(), name="reminders"),
+            asyncio.create_task(tasks.task_runner_loop(), name="tasks"),
+            asyncio.create_task(triggers.trigger_loop(), name="triggers"),
+        ]
+
+        async def _stop_background() -> None:
+            for task in background:
+                task.cancel()
+
+        ctx.add_shutdown_callback(_stop_background)
 
 
 if __name__ == "__main__":

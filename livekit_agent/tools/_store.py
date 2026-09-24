@@ -7,6 +7,7 @@ read-modify-write cycles -- no external DB needed for a local voice agent.
 from __future__ import annotations
 
 import asyncio
+import copy
 import json
 from pathlib import Path
 from typing import Any
@@ -21,13 +22,15 @@ def _lock_for(path: Path) -> asyncio.Lock:
 
 
 def read_json(path: Path, default: Any) -> Any:
+    # A fresh copy every time: handing out the shared default list/dict let a
+    # caller's in-place mutation leak into every later read of any missing file.
     if not path.exists():
-        return default
+        return copy.deepcopy(default)
     try:
         with open(path, encoding="utf-8") as f:
             return json.load(f)
     except (json.JSONDecodeError, OSError):
-        return default
+        return copy.deepcopy(default)
 
 
 def write_json(path: Path, data: Any) -> None:

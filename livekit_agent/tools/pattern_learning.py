@@ -22,6 +22,7 @@ import re
 import anthropic
 
 import config
+import usage
 from tools import claude_cli
 from tools.memory import update_memory
 
@@ -101,6 +102,7 @@ No markdown, no explanation."""
             max_tokens=1024,
             messages=[{"role": "user", "content": prompt}],
         )
+        usage.record_response(config.ANTHROPIC_MODEL, msg.usage, source="pattern_learning")
         text = "".join(b.text for b in msg.content if getattr(b, "type", "") == "text")
     text = re.sub(r"^```(?:json)?\s*", "", text.strip())
     text = re.sub(r"\s*```$", "", text)

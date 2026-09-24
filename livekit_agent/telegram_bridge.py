@@ -10,39 +10,38 @@ keeps its own local session file (this one bootstrapped by copying the
 already-authorized one on first run) so the two connections never contend
 over the same SQLite session file.
 
-Security model (deliberate compromise, not an oversight): anyone can send
-this account a message and get an ordinary conversation back -- no tools,
-no injected personal memory, so a stranger can't extract facts about the
-owner or make Jarvis act on their computer. The first sender ever to
-message this account becomes the "owner" (recorded in
-config.TELEGRAM_OWNER_FILE) and is the only sender who gets the full tool
-set and personal memory, exactly like the voice loop. Delete that file to
-let a new sender re-claim ownership.
+Security model: anyone can send this account a message and get an ordinary
+conversation back -- no tools, no injected personal memory, so a stranger
+can't extract facts about the owner or make Jarvis act on their computer.
+Strangers are rate-limited per day (config.TELEGRAM_STRANGER_MAX_PER_DAY) so
+spam can't run up the API bill. The owner is whoever sends the one-time
+pairing code shown in the local control panel (see telegram_owner.py) and is
+the only sender who gets the full tool set and personal memory, exactly like
+the voice loop.
 """
 
 from __future__ import annotations
 
 import asyncio
-import json
 import logging
 import shutil
 import sqlite3
 import time
 from pathlib import Path
 
-import anthropic
 from dotenv import load_dotenv
 
 load_dotenv()
 
+import agent_loop
+import approvals
 import config
 import prompts
 import telegram_contacts
+import telegram_owner
 from telethon import TelegramClient, events
-from tools import FUNCTION_TOOLS
 from tools._store import JsonStore
 from tools.memory import load_memory
-from tools.registry import IMPL_REGISTRY
 
 logging.basicConfig(level=logging.INFO)
 logger = logging.getLogger("jarvis-voice-agent.telegram_bridge")
@@ -70,57 +69,19 @@ _TELEGRAM_CONTEXT_NOTE = """
 """
 
 
-def _load_owner_id() -> int | None:
-    if not config.TELEGRAM_OWNER_FILE.exists():
-        return None
-    try:
-        return json.loads(config.TELEGRAM_OWNER_FILE.read_text(encoding="utf-8")).get("owner_id")
-    except Exception:
-        return None
+# sender_id -> (date, count) of stranger messages answered today.
+_stranger_usage: dict[int, tuple[str, int]] = {}
 
 
-def _claim_owner(sender_id: int, sender_name: str) -> None:
-    config.TELEGRAM_OWNER_FILE.write_text(
-        json.dumps({"owner_id": sender_id, "owner_name": sender_name, "claimed": time.strftime("%Y-%m-%d %H:%M:%S")}),
-        encoding="utf-8",
-    )
-    logger.info("claimed Telegram bridge ownership: %s (%s)", sender_name, sender_id)
-
-
-# A fresh anthropic.AsyncAnthropic() per turn (the old code) opens a new
-# HTTP connection pool -- a fresh TCP+TLS handshake -- on every single
-# Telegram message instead of reusing a warm one, which was real, avoidable
-# latency on every reply. One client, created once, reused for the life of
-# the process.
-_anthropic_client: anthropic.AsyncAnthropic | None = None
-
-
-def _get_client() -> anthropic.AsyncAnthropic:
-    global _anthropic_client
-    if _anthropic_client is None:
-        _anthropic_client = anthropic.AsyncAnthropic(api_key=config.ANTHROPIC_API_KEY)
-    return _anthropic_client
-
-
-# Likewise: FUNCTION_TOOLS never changes after process start, so the
-# schema-conversion work (~45 tools) doesn't need to be redone on every
-# owner message either.
-_cached_owner_tools: list[dict] | None = None
-
-
-def _owner_tools() -> list[dict]:
-    global _cached_owner_tools
-    if _cached_owner_tools is None:
-        from livekit.agents.llm import ToolContext
-        from livekit.agents.llm._provider_format.anthropic import to_fnc_ctx
-
-        ctx = ToolContext(FUNCTION_TOOLS)
-        result = to_fnc_ctx(ctx, strict=False)
-        fnc_ctx = result[0] if isinstance(result, tuple) else result
-        if fnc_ctx:
-            fnc_ctx[-1] = {**fnc_ctx[-1], "cache_control": {"type": "ephemeral"}}
-        _cached_owner_tools = fnc_ctx
-    return _cached_owner_tools
+def _stranger_allowed(sender_id: int) -> bool:
+    today = time.strftime("%Y-%m-%d")
+    day, count = _stranger_usage.get(sender_id, (today, 0))
+    if day != today:
+        count = 0
+    if count >= config.TELEGRAM_STRANGER_MAX_PER_DAY:
+        return False
+    _stranger_usage[sender_id] = (today, count + 1)
+    return True
 
 
 # Notes Jarvis keeps about the people it corresponds with -- see
@@ -181,49 +142,17 @@ def _flatten(turns: list[list[dict]]) -> list[dict]:
 async def _run_turn(
     *, system_text: str, tools_param: list[dict], history: list[dict], user_text: str, contact_id: int,
 ) -> tuple[str, list[dict]]:
-    client = _get_client()
-    system_blocks = [{"type": "text", "text": system_text, "cache_control": {"type": "ephemeral"}}]
-    messages = history + [{"role": "user", "content": user_text}]
+    async def _remember_contact_note(args: dict) -> dict:
+        note = (args.get("note") or "").strip()
+        if note:
+            await telegram_contacts.add_note(contact_id, note)
+        return {"status": "ok", "message": "Заметка сохранена." if note else "Пустая заметка проигнорирована."}
 
-    for _ in range(config.TELEGRAM_BRIDGE_MAX_STEPS):
-        response = await client.messages.create(
-            model=config.ANTHROPIC_MODEL,
-            max_tokens=2048,
-            system=system_blocks,
-            tools=tools_param,
-            messages=messages,
-        )
-        messages.append({"role": "assistant", "content": [b.model_dump() for b in response.content]})
-
-        tool_uses = [b for b in response.content if b.type == "tool_use"]
-        if not tool_uses:
-            final_text = "".join(b.text for b in response.content if b.type == "text").strip()
-            return final_text or "...", messages
-
-        result_blocks = []
-        for tu in tool_uses:
-            if tu.name == "remember_contact_note":
-                note = (tu.input or {}).get("note", "").strip()
-                if note:
-                    await telegram_contacts.add_note(contact_id, note)
-                result = {"status": "ok", "message": "Заметка сохранена." if note else "Пустая заметка проигнорирована."}
-            else:
-                impl = IMPL_REGISTRY.get(tu.name)
-                if impl is None:
-                    result = {"status": "error", "message": f"Инструмент «{tu.name}» не найден."}
-                else:
-                    try:
-                        result = await impl(**tu.input)
-                    except Exception as exc:
-                        result = {"status": "error", "message": str(exc)}
-            result_blocks.append({
-                "type": "tool_result",
-                "tool_use_id": tu.id,
-                "content": json.dumps(result, ensure_ascii=False),
-            })
-        messages.append({"role": "user", "content": result_blocks})
-
-    return "Не получилось обработать запрос за разумное число шагов.", messages
+    return await agent_loop.run(
+        system_text=system_text, tools_param=tools_param, history=history, user_text=user_text,
+        max_steps=config.TELEGRAM_BRIDGE_MAX_STEPS, source="telegram",
+        extra_tools={"remember_contact_note": _remember_contact_note},
+    )
 
 
 async def _developer_disclosure() -> str:
@@ -247,23 +176,30 @@ async def _handle_message(event) -> None:
     if not text:
         return
 
-    owner_id = _load_owner_id()
-    is_owner = owner_id is not None and sender_id == owner_id
-
-    if owner_id is None:
-        sender = await event.get_sender()
-        sender_name = getattr(sender, "first_name", None) or str(sender_id)
-        _claim_owner(sender_id, sender_name)
-        is_owner = True
-
     sender = await event.get_sender()
     sender_name = getattr(sender, "first_name", None) or str(sender_id)
+
+    if telegram_owner.load_owner_id() is None and telegram_owner.try_claim(sender_id, sender_name, text):
+        logger.info("Telegram ownership claimed with the pairing code: %s (%s)", sender_name, sender_id)
+        await event.reply("Готово: теперь вы мой владелец. Здесь можно давать мне любые поручения, "
+                          "сюда же буду присылать уведомления и запросы на подтверждение.")
+        return
+    is_owner = sender_id == telegram_owner.load_owner_id()
+
+    if is_owner:
+        handled = await approvals.handle_owner_reply(text)
+        if handled is not None:
+            await event.reply(handled)
+            return
+    elif not _stranger_allowed(sender_id):
+        return
+
     contact = await telegram_contacts.touch_contact(sender_id, sender_name)
 
     if is_owner:
         memory = await load_memory()
         system_text = prompts.build_instructions(memory) + _TELEGRAM_CONTEXT_NOTE
-        tools_param = _owner_tools() + [_REMEMBER_CONTACT_TOOL]
+        tools_param = agent_loop.tool_schemas() + [_REMEMBER_CONTACT_TOOL]
     else:
         system_text = (_STRANGER_SYSTEM_PROMPT + _TELEGRAM_CONTEXT_NOTE + await _developer_disclosure()
                        + telegram_contacts.contact_context(contact))
@@ -299,6 +235,9 @@ async def main() -> None:
         shutil.copyfile(main_session, bridge_session)
         logger.info("bootstrapped bridge session from the main Telegram session")
 
+    from tools import tasks
+
+    tasks.DEFAULT_SOURCE = "telegram"
     await _load_histories()
     logger.info("loaded %d saved conversation(s) from %s", len(_histories), config.TELEGRAM_HISTORY_FILE)
 

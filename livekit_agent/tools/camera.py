@@ -25,6 +25,7 @@ from livekit.agents import RunContext, function_tool
 
 import camera_bridge
 import config
+import usage
 from tools import runtime
 from tools._logging import log_call
 from tools.registry import register_impl, register_tool
@@ -79,6 +80,7 @@ async def _ask_about_image(image_path, question: str) -> str:
             ],
         }],
     )
+    usage.record_response(config.CAMERA_MODEL, msg.usage, source="camera")
     parts = [c.text for c in msg.content if getattr(c, "type", None) == "text"]
     return "".join(parts).strip() or "Не удалось разобрать, что на кадре."
 

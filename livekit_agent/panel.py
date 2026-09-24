@@ -98,10 +98,14 @@ FIELDS: list[dict[str, Any]] = [
      "help": "cloud.livekit.io → ваш проект → Settings. Нужен только для телефонных звонков."},
     {"group": "livekit", "key": "LIVEKIT_API_KEY", "label": "API Key", "placeholder": "API…"},
     {"group": "livekit", "key": "LIVEKIT_API_SECRET", "label": "API Secret", "secret": True, "placeholder": "…"},
+    {"group": "livekit", "key": "PHONE_ALLOWED_NUMBERS", "label": "Номера с полным доступом", "placeholder": "+380501234567, …",
+     "help": "Только эти номера могут по телефону управлять компьютером. Остальным — просто разговор. Пусто — никому."},
     {"group": "extra", "key": "WAKE_HOTKEY", "label": "Клавиша сна/пробуждения", "placeholder": "f10"},
     {"group": "extra", "key": "SLEEP_AFTER_SILENCE_S", "label": "Автосон через (секунд тишины)", "placeholder": "180"},
     {"group": "extra", "key": "AUDIO_INPUT_DEVICE", "label": "Микрофон (номер или часть названия)", "placeholder": "по умолчанию"},
     {"group": "extra", "key": "AUDIO_OUTPUT_DEVICE", "label": "Динамики (номер или часть названия)", "placeholder": "по умолчанию"},
+    {"group": "extra", "key": "DAILY_BUDGET_USD", "label": "Лимит расходов на ИИ в день, $", "placeholder": "3",
+     "help": "Когда потрачено больше, фоновые задачи и «работа глазами» не запускаются до завтра. 0 — без лимита."},
     {"group": "extra", "key": "USE_CLAUDE_CLI", "label": "Фоновые задачи через подписку Claude Code", "type": "select",
      "options": [["0", "Нет — только API-ключ (рекомендуется)"], ["1", "Да — через локальный claude CLI"]],
      "help": "Только для памяти и анализа привычек. Убедитесь, что условия вашей подписки Anthropic это разрешают."},
@@ -375,6 +379,28 @@ async def test_service(service: str) -> dict[str, Any]:
         return await fn(read_env())
     except httpx.HTTPError as exc:
         return {"ok": False, "message": f"Нет соединения с сервисом: {exc}"}
+
+
+# ---------------------------------------------------------------------------
+# Telegram owner pairing (see telegram_owner.py)
+# ---------------------------------------------------------------------------
+
+
+@app.get("/api/telegram/owner")
+def telegram_owner_status() -> dict[str, Any]:
+    import telegram_owner
+
+    owner = telegram_owner.load_owner()
+    if owner:
+        return {"owner": owner.get("owner_name") or str(owner["owner_id"]), "claimed": owner.get("claimed")}
+    return {"owner": None, "code": telegram_owner.pairing_code()}
+
+
+@app.post("/api/telegram/owner/reset")
+def telegram_owner_reset() -> dict[str, Any]:
+    import telegram_owner
+
+    return {"owner": None, "code": telegram_owner.reset_owner()}
 
 
 # ---------------------------------------------------------------------------

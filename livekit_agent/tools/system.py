@@ -50,6 +50,12 @@ async def open_application(context: RunContext, name: str) -> str:
     return result["message"]
 
 
+_NEVER_CLOSE = {
+    "explorer.exe", "dwm.exe", "csrss.exe", "winlogon.exe", "lsass.exe", "services.exe",
+    "svchost.exe", "smss.exe", "wininit.exe", "system", "python.exe", "pythonw.exe",
+}
+
+
 def _find_process_hint(name: str) -> str:
     key = name.strip().lower()
     return config.APP_PROCESS_HINTS.get(key, key)
@@ -59,10 +65,14 @@ def _find_process_hint(name: str) -> str:
 @log_call("close_application")
 async def _close_application(*, name: str) -> dict:
     hint = _find_process_hint(name)
+    # A substring match on a 1-2 letter hint ("e", "co") would terminate half
+    # the system; the processes below keep Windows / Jarvis itself alive.
+    if len(hint) < 3:
+        return {"status": "error", "message": f"Слишком короткое название «{name}» — уточните, что закрыть."}
     matched = []
     for proc in psutil.process_iter(["pid", "name"]):
         pname = (proc.info.get("name") or "").lower()
-        if hint in pname:
+        if hint in pname and pname not in _NEVER_CLOSE and proc.pid != os.getpid():
             matched.append(proc)
 
     if not matched:

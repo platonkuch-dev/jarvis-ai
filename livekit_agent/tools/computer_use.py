@@ -49,6 +49,7 @@ import anthropic
 from livekit.agents import RunContext, function_tool
 
 import config
+import usage as usage_tracker
 from tools._logging import log_call
 from tools.registry import register_impl, register_tool
 
@@ -515,6 +516,9 @@ def _run_loop(task: str, max_steps: int) -> tuple[str, list[str], dict[str, str]
             return done(f"Не уложился во время ({config.COMPUTER_USE_MAX_SECONDS} с) -- остановился.")
         if used >= max_steps:
             return done(f"Не удалось завершить задачу за {max_steps} действий -- остановился.")
+        left = usage_tracker.budget_left()
+        if left is not None and left <= 0:
+            return done("Остановился: исчерпан дневной лимит расходов на ИИ.")
 
         response = client.beta.messages.create(
             model=config.COMPUTER_USE_MODEL,
@@ -525,6 +529,7 @@ def _run_loop(task: str, max_steps: int) -> tuple[str, list[str], dict[str, str]
             messages=messages,
         )
         usage = getattr(response, "usage", None)
+        usage_tracker.record_response(config.COMPUTER_USE_MODEL, usage, source="computer_use")
         tokens_in += sum(getattr(usage, k, 0) or 0 for k in
                          ("input_tokens", "cache_creation_input_tokens", "cache_read_input_tokens"))
         tokens_out += getattr(usage, "output_tokens", 0) or 0
@@ -743,6 +748,9 @@ def _run_openai_loop(task: str, max_steps: int) -> tuple[str, list[str], dict[st
             return done(f"Не уложился во время ({config.COMPUTER_USE_MAX_SECONDS} с) -- остановился.")
         if used >= max_steps:
             return done(f"Не удалось завершить задачу за {max_steps} действий -- остановился.")
+        left = usage_tracker.budget_left()
+        if left is not None and left <= 0:
+            return done("Остановился: исчерпан дневной лимит расходов на ИИ.")
 
         response = client.responses.create(
             model=config.OPENAI_COMPUTER_USE_MODEL,
@@ -755,6 +763,8 @@ def _run_openai_loop(task: str, max_steps: int) -> tuple[str, list[str], dict[st
         previous_response_id = response.id
         usage = getattr(response, "usage", None)
         if usage is not None:
+            usage_tracker.record(config.OPENAI_COMPUTER_USE_MODEL, getattr(usage, "input_tokens", 0) or 0,
+                                 getattr(usage, "output_tokens", 0) or 0, source="computer_use")
             tokens_in += getattr(usage, "input_tokens", 0) or 0
             tokens_out += getattr(usage, "output_tokens", 0) or 0
 
@@ -820,6 +830,9 @@ async def _use_computer(*, task: str, max_steps: int | None = None) -> dict:
         return {"status": "error", "message": "Не задан OPENAI_API_KEY."}
     if not use_openai and not config.ANTHROPIC_API_KEY:
         return {"status": "error", "message": "Не задан ANTHROPIC_API_KEY."}
+    refusal = usage_tracker.check_budget("работу с экраном")
+    if refusal:
+        return {"status": "error", "message": refusal}
     if not _RUN_LOCK.acquire(blocking=False):
         return {"status": "error", "message": "Я уже выполняю другую задачу на экране. Скажи «стоп», чтобы прервать её."}
 

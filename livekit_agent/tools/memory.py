@@ -19,6 +19,7 @@ import anthropic
 from livekit.agents import RunContext, function_tool
 
 import config
+import usage
 from tools import claude_cli, runtime
 from tools._logging import log_call
 from tools._store import JsonStore
@@ -115,6 +116,7 @@ Return ONLY the consolidated memory as valid JSON, same schema -- no markdown, n
                 max_tokens=2048,
                 messages=[{"role": "user", "content": prompt}],
             )
+            usage.record_response(config.ANTHROPIC_MODEL, msg.usage, source="memory")
             text = "".join(b.text for b in msg.content if getattr(b, "type", "") == "text")
         text = re.sub(r"^```(?:json)?\s*", "", text.strip())
         text = re.sub(r"\s*```$", "", text)

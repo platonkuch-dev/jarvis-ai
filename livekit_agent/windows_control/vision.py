@@ -70,6 +70,9 @@ def _locate_with_claude(image_bytes: bytes, prompt: str) -> str | None:
             ],
         }],
     )
+    import usage
+
+    usage.record_response(config.ANTHROPIC_MODEL, msg.usage, source="vision")
     return msg.content[0].text
 
 

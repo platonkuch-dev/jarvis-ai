@@ -42,6 +42,7 @@ import anthropic
 from livekit.agents import RunContext, function_tool
 
 import config
+import usage
 import hud_bridge
 import screen_watch_bridge
 from tools import runtime
@@ -104,6 +105,7 @@ def _classify(client: anthropic.Anthropic, img) -> str:
         system=_SYSTEM_PROMPT,
         messages=[{"role": "user", "content": [_jpeg_block(small)]}],
     )
+    usage.record_response(config.SCREEN_WATCH_MODEL, response.usage, source="screen_watch")
     return "".join(b.text for b in response.content if b.type == "text").strip()
 
 

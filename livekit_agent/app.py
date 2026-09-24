@@ -29,6 +29,7 @@ import pystray
 from PIL import Image
 
 import config
+import notify
 
 BASE_DIR = Path(__file__).resolve().parent
 PYTHON = sys.executable
@@ -42,6 +43,17 @@ PANEL_LOG_PATH = config.LOGS_DIR / "panel.log"
 PANEL_PORT = 8765
 ICON_PATH = BASE_DIR / "assets" / "jarvis.ico"
 
+
+def _rotate_log(path: Path) -> None:
+    """Keep one previous generation (<name>.1) once a log passes LOG_MAX_BYTES."""
+    try:
+        if path.exists() and path.stat().st_size > config.LOG_MAX_BYTES:
+            os.replace(path, path.with_suffix(path.suffix + ".1"))
+    except OSError:
+        pass  # held open elsewhere -- try again on the next start
+
+
+_rotate_log(SUPERVISOR_LOG_PATH)
 logging.basicConfig(
     filename=SUPERVISOR_LOG_PATH, level=logging.INFO,
     format="%(asctime)s %(levelname)s %(message)s",
@@ -49,12 +61,15 @@ logging.basicConfig(
 logger = logging.getLogger("jarvis-voice-agent.supervisor")
 
 _WATCHDOG_INTERVAL_S = 30.0
-# Backs off (stops auto-restarting) a process that's crash-looping instead
-# of hammering it forever -- 5 restarts within 5 minutes means something is
-# actually broken, not a one-off blip, and keeps needing a fresh process
-# won't fix it.
+# Backs off a process that's crash-looping instead of hammering it -- 5
+# restarts within 5 minutes means something is actually broken (no network,
+# an expired key), not a one-off blip. It isn't given up on for good,
+# though: after _COOLDOWN_S it gets a fresh set of attempts, because the
+# usual causes (network back, balance topped up) fix themselves while
+# nobody is at the PC. The owner is told on Telegram either way.
 _MAX_RESTARTS_PER_WINDOW = 5
 _RESTART_WINDOW_S = 300.0
+_COOLDOWN_S = 1800.0
 
 
 def _worker_args() -> list[str]:
@@ -80,6 +95,7 @@ class _ManagedProcess:
         self._proc: subprocess.Popen | None = None
         self._log_file = None
         self._restart_times: list[float] = []
+        self._cooldown_until = 0.0
 
     def is_alive(self) -> bool:
         return self._proc is not None and self._proc.poll() is None
@@ -97,11 +113,21 @@ class _ManagedProcess:
         if not self.is_enabled() or self.is_alive():
             return
         now = time.time()
+        if now < self._cooldown_until:
+            return
         self._restart_times = [t for t in self._restart_times if now - t < _RESTART_WINDOW_S]
         if len(self._restart_times) >= _MAX_RESTARTS_PER_WINDOW:
+            self._cooldown_until = now + _COOLDOWN_S
+            self._restart_times = []
             logger.warning(
-                "%s crashed again but hit the restart limit (%d in %.0fs) -- leaving it down, check %s",
-                self.name, len(self._restart_times), _RESTART_WINDOW_S, self._log_path,
+                "%s keeps crashing (%d restarts in %.0fs) -- pausing restarts for %.0f min, check %s",
+                self.name, _MAX_RESTARTS_PER_WINDOW, _RESTART_WINDOW_S, _COOLDOWN_S / 60, self._log_path,
+            )
+            notify.notify_owner(
+                f"⚠️ Процесс «{self.name}» падает раз за разом ({_MAX_RESTARTS_PER_WINDOW} раз за "
+                f"{_RESTART_WINDOW_S / 60:.0f} мин). Попробую снова через {_COOLDOWN_S / 60:.0f} мин. "
+                f"Частые причины: нет интернета, кончился баланс API, неверный ключ. Лог: {self._log_path.name}",
+                kind="supervisor",
             )
             return
         self._restart_times.append(now)
@@ -114,6 +140,7 @@ class _ManagedProcess:
         if not self.is_enabled():
             logger.info("%s is not configured yet -- skipping", self.name)
             return
+        _rotate_log(self._log_path)
         self._log_file = open(self._log_path, "a", encoding="utf-8")
         env = dict(os.environ)
         # worker.py console prints a startup banner via `rich`; force UTF-8 so

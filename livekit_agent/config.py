@@ -80,10 +80,10 @@ TELEGRAM_SESSION_PATH = str(DATA_DIR / "jarvis_telegram")
 # long-lived listener connection and tools/telegram_dm.py's occasional
 # send-only connection never contend for the same local SQLite session file.
 TELEGRAM_BRIDGE_SESSION_PATH = str(DATA_DIR / "jarvis_telegram_bridge")
-# First sender to message the account claims this file and is the only one
-# who gets real tool access from then on; everyone else gets plain
-# conversation with no tools and no injected personal memory. Delete the
-# file to let a new sender re-claim ownership.
+# Whoever sends the one-time pairing code from the control panel claims this
+# file (telegram_owner.py) and is the only one who gets real tool access;
+# everyone else gets plain conversation with no tools and no injected
+# personal memory. "Сменить владельца" in the panel resets it.
 TELEGRAM_OWNER_FILE = DATA_DIR / "telegram_owner.json"
 TELEGRAM_BRIDGE_MAX_STEPS = int(os.environ.get("TELEGRAM_BRIDGE_MAX_STEPS", "8"))
 # Turns, not raw messages -- one turn can be several messages (a tool_use /
@@ -105,6 +105,34 @@ TELEGRAM_CONTACT_MAX_NOTES = 20
 # yet (so there's no contact record to attach the note to), keyed by the
 # name as given -- merged in the moment a matching name first messages.
 TELEGRAM_PENDING_NOTES_FILE = DATA_DIR / "telegram_pending_notes.json"
+# Strangers get plain Haiku chat; this caps how many of their messages per
+# day get an (API-billed) answer, so spam can't run up the bill.
+TELEGRAM_STRANGER_MAX_PER_DAY = int(os.environ.get("TELEGRAM_STRANGER_MAX_PER_DAY", "20"))
+
+# ---------------------------------------------------------------------------
+# Autonomy: background tasks, triggers, approvals, spending limit
+# ---------------------------------------------------------------------------
+TASKS_FILE = DATA_DIR / "tasks.json"
+TRIGGERS_FILE = DATA_DIR / "triggers.json"
+USAGE_FILE = DATA_DIR / "usage.json"
+# How long a background task waits for the owner's "да"/"нет" on Telegram
+# before treating silence as "no" (approvals.py).
+APPROVAL_TIMEOUT_S = float(os.environ.get("APPROVAL_TIMEOUT_S", "600"))
+# Hard daily ceiling on paid LLM spend, in USD, counted from real token usage
+# (usage.py). Past it, background tasks and use_computer refuse to start and
+# the owner gets one Telegram notice; plain conversation keeps working.
+# 0 disables the limit.
+DAILY_BUDGET_USD = float(os.environ.get("DAILY_BUDGET_USD", "3"))
+TASK_MAX_STEPS = int(os.environ.get("TASK_MAX_STEPS", "12"))
+# Child-process logs (app.py) and tool_calls.log roll over past this size.
+LOG_MAX_BYTES = int(os.environ.get("LOG_MAX_BYTES", str(5 * 1024 * 1024)))
+# Phone callers (LiveKit SIP) whose number is in this comma-separated list get
+# the full tool set; everyone else gets conversation only. Empty = nobody:
+# a phone number is public, a caller ID is the only thing tying a call to you.
+PHONE_ALLOWED_NUMBERS = [
+    "".join(ch for ch in n if ch.isdigit())
+    for n in os.environ.get("PHONE_ALLOWED_NUMBERS", "").split(",") if n.strip()
+]
 
 # --- Proactive system monitor (proactive_monitor.py) ---
 # Own session copy again, same reason as the bridge -- a persistent-ish
@@ -125,6 +153,9 @@ ANTHROPIC_API_KEY = os.environ.get("ANTHROPIC_API_KEY", "")
 # claude-haiku-4-5-20251001 is the current Claude Haiku snapshot; override via
 # env if a newer Haiku snapshot should be pinned instead.
 ANTHROPIC_MODEL = os.environ.get("ANTHROPIC_MODEL", "claude-haiku-4-5-20251001")
+# Model for background tasks (tasks.py). Haiku: tasks mostly chain existing
+# tools, and anything visual goes through use_computer's own model anyway.
+TASK_MODEL = os.environ.get("TASK_MODEL", ANTHROPIC_MODEL)
 
 # --- Main conversation model provider (worker.py) ---
 # "anthropic" (default, Claude) or "openai" (GPT-6 Sol/Luna, via the

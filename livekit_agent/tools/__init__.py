@@ -27,7 +27,9 @@ from tools import (  # noqa: F401,E402  (imported for their registration side ef
     screen_watch,
     security,
     system,
+    tasks,
     telegram_dm,
+    triggers,
     voice_control,
     window_control,
 )
