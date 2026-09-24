@@ -48,8 +48,8 @@ LOCK = HERE / "requirements.lock"
 ICON = ROOT / "assets" / "jarvis.ico"
 
 # Not shipped inside the installed app: dev tooling, tests, the optional browser client, batch launchers.
-EXCLUDE_PREFIXES = ("installer/", "web/", "scripts/", "dist_release/", "docs/")
-EXCLUDE_NAMES = {"web_api.py", "test_computer_use.py", "INSTALL_JARVIS.bat", "Start-Panel.bat", ".gitignore"}
+EXCLUDE_PREFIXES = ("installer/", "web/", "scripts/", "dist_release/", "docs/", "tests/")
+EXCLUDE_NAMES = {"web_api.py", "test_computer_use.py", "pytest.ini", "INSTALL_JARVIS.bat", "Start-Panel.bat", ".gitignore"}
 
 # The embeddable interpreter ignores PYTHONPATH and does NOT put a script's own folder on sys.path,
 # so the app folder (a sibling of runtime\ in the installed layout) has to be listed here.
@@ -95,10 +95,11 @@ def pyinstaller(script: Path, name: str, extra: list[str] | None = None) -> Path
 # ---------------------------------------------------------------------------
 
 
-# Qt modules the HUD never imports (it uses QtCore/QtGui/QtWidgets only): safe to drop, ~80 MB.
+# Qt modules the HUD never imports: safe to drop. QtMultimedia and its ffmpeg DLLs
+# (av*, sw*) must stay -- compact_bar.py's CameraPanel imports QtMultimedia, and
+# without them hud_bar.py fails to start at all.
 QT_DROP_DIRS = ("qml", "translations", "qsci")
-QT_DROP_DLL_PREFIXES = ("Qt6Quick", "Qt6Qml", "Qt6Pdf", "Qt6Designer", "Qt6ShaderTools", "Qt6Multimedia",
-                        "avcodec", "avformat", "avutil", "swresample", "swscale")
+QT_DROP_DLL_PREFIXES = ("Qt6Quick", "Qt6Qml", "Qt6Pdf", "Qt6Designer", "Qt6ShaderTools", "Qt6MultimediaQuick")
 
 
 def finalize_runtime(runtime: Path) -> None:
