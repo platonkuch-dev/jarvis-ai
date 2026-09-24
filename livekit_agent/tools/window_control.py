@@ -7,11 +7,12 @@
 
 ui_automation (find/click/type/read/select UI elements inside a window, via
 router.py's Level 2-4 ladder) is intentionally NOT registered as an LLM-facing
-tool below -- by request, every click/type/read inside a window goes through
-use_computer (tools/computer_use.py) instead, never this. _ui_automation
-stays registered in IMPL_REGISTRY (@register_impl only, no @function_tool)
-so a previously-saved scenario that recorded a step against it still replays;
-it just isn't offered to the model as something to call fresh.
+tool below: its lower levels guess by vision or type blindly into whatever
+has focus and still report success. The model gets tools/quick_ui.py
+instead, which uses only the strict UI Automation level and hands anything
+else to use_computer. _ui_automation stays registered in IMPL_REGISTRY
+(@register_impl only, no @function_tool) so a previously-saved scenario
+that recorded a step against it still replays.
 
 Both are thin, logged wrappers around windows_control.router, which does the
 actual layered work (native API -> UI Automation -> keyboard/mouse -> vision)
@@ -199,5 +200,5 @@ async def _ui_automation(
 
 
 # No @register_tool/@function_tool wrapper here on purpose -- see the module
-# docstring: ui_automation is deliberately not offered to the model, so every
-# click/type/read inside a window goes through use_computer instead.
+# docstring: ui_automation is deliberately not offered to the model; single
+# clicks/types/reads go through tools/quick_ui.py (strict UIA, then use_computer).

@@ -51,6 +51,7 @@ _ACTION_LEVELS: dict[str, dict[str, str]] = {
     "desktop_control": {"list": SAFE, "stats": SAFE, "current_wallpaper": SAFE},
     "file_manager": {"list": SAFE, "info": SAFE, "find": SAFE, "read": SAFE, "largest": SAFE,
                      "disk_usage": SAFE, "create_folder": SAFE},
+    "quick_ui": {"read": SAFE},
     "ui_automation": {"find": SAFE, "read": SAFE, "get_tree": SAFE, "wait_for_element": SAFE},
 }
 

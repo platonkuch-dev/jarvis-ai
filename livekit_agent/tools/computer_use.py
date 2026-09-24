@@ -865,15 +865,14 @@ async def _stop_computer_use() -> dict:
 async def use_computer(context: RunContext, task: str, max_steps: int | None = None) -> str:
     """Take over the mouse/keyboard and finish a multi-step task on this PC by
     looking at the real screen and clicking/typing step by step. Use it for
-    ANY click, typed text, or read of something inside a window -- not just
-    when no other tool covers it: registering an account on a website,
-    filling in forms, changing an app's or Windows' settings, opening a
-    program and working in it, editing in Adobe Premiere Pro / After Effects
-    / Illustrator, menus and slow-paced games. Slower and more expensive than
-    a typed tool, so still prefer window_manager (open/close/focus/list a
-    window) or photoshop_control/file_manager when one of those already
-    covers the whole step -- but for anything that needs to click or type
-    inside a window, this is the tool, always.
+    multi-step work inside windows: registering an account on a website,
+    filling in forms, changing an app's or Windows' settings, working in a
+    program, editing in Adobe Premiere Pro / After Effects / Illustrator,
+    menus and slow-paced games. Slower and more expensive than a typed tool:
+    prefer window_manager (open/close/focus/list a window) or
+    photoshop_control/file_manager when one of those covers the whole step,
+    and quick_ui for a single click/type/read (it falls back to this tool by
+    itself when needed).
 
     It cannot pass CAPTCHAs, SMS/e-mail codes, 2FA or payment details -- when
     it needs the user for one, the returned text starts with "НУЖЕН_ЧЕЛОВЕК:":

@@ -278,7 +278,10 @@ def find_element(query: str, app: str = "", control_type: str = "", index: int =
 
 def click(query: str = "", app: str = "", control_type: str = "",
           x: int | None = None, y: int | None = None,
-          double: bool = False, button: str = "left") -> ActionResult:
+          double: bool = False, button: str = "left", strict: bool = False) -> ActionResult:
+    """strict=True stops after Level 2: only a real UI Automation hit counts,
+    no coordinate/vision guessing (tools/quick_ui.py falls back to the
+    screen-reading agent instead)."""
     t0 = time.monotonic()
     ctx = get_context()
     ctx.begin_action("click")
@@ -301,6 +304,8 @@ def click(query: str = "", app: str = "", control_type: str = "",
                 ctx.remember_elements([uia.element_to_ref(el, app=app_label, window_title=window_title)])
                 ctx.record_history({"action": "click", "target": query, "method": "uia", "success": True})
                 return ActionResult(True, f"Clicked '{query}'.", "uia")
+    if strict:
+        return ActionResult(False, f"'{query}' not found by UI Automation.")
 
     # Level 3 — explicit coordinates given, use them directly.
     if x is not None and y is not None:
@@ -342,7 +347,10 @@ def click(query: str = "", app: str = "", control_type: str = "",
 
 
 def type_into(text: str, query: str = "", app: str = "", control_type: str = "",
-              clear_first: bool = True) -> ActionResult:
+              clear_first: bool = True, strict: bool = False) -> ActionResult:
+    """strict=True: only type into a field UI Automation actually found --
+    never fall through to vision or to blind typing at whatever has focus
+    (which reports success even when the text lands in the wrong place)."""
     t0 = time.monotonic()
     ctx = get_context()
     ctx.begin_action("type")
@@ -363,6 +371,8 @@ def type_into(text: str, query: str = "", app: str = "", control_type: str = "",
             if res.ok:
                 ctx.record_history({"action": "type", "target": query, "method": "uia", "success": True})
                 return ActionResult(True, f"Typed into '{query or control_type}'.", "uia")
+    if strict:
+        return ActionResult(False, f"Field '{query or control_type}' not found by UI Automation.")
 
     # Level 4 -> 3 — vision finds the field (needs a real text description,
     # a bare control_type means nothing to a vision model), keyboard types into it.

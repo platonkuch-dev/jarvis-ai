@@ -22,6 +22,7 @@ from tools import (  # noqa: F401,E402  (imported for their registration side ef
     media,
     memory,
     notes,
+    quick_ui,
     scenarios,
     scheduling,
     screen_watch,
