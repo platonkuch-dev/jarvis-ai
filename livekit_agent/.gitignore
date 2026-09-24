@@ -1,0 +1,34 @@
+# --- secrets and personal data: never commit ---
+.env
+.env.*
+!.env.example
+data/
+logs/
+*.session
+*.session-journal
+scenarios.json
+
+# --- python ---
+.venv/
+__pycache__/
+*.pyc
+*.egg-info/
+
+# --- tooling / editors ---
+.claude/
+.idea/
+.vscode/
+
+# --- web frontend (build it yourself: cd web && npm install && npm run build) ---
+web/node_modules/
+web/dist/
+
+# --- release output ---
+dist_release/
+*.zip
+
+# --- installer build output (regenerate with installer/build.py) ---
+installer/build_venv/
+installer/cache/
+installer/work/
+installer/out/

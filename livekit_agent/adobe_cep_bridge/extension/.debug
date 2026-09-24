@@ -1,0 +1,9 @@
+<?xml version="1.0" encoding="UTF-8"?>
+<ExtensionList>
+  <Extension Id="com.jarvis.adobebridge.panel">
+    <HostList>
+      <Host Name="PPRO" Port="9231"/>
+      <Host Name="AEFT" Port="9232"/>
+    </HostList>
+  </Extension>
+</ExtensionList>

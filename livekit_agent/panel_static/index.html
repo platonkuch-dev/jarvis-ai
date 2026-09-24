@@ -1,0 +1,574 @@
+<!doctype html>
+<html lang="ru">
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width, initial-scale=1">
+<title>Джарвис — панель управления</title>
+<style>
+:root {
+  --bg: #0a121f;
+  --rail: #0d1727;
+  --surface: #111e33;
+  --line: #22324d;
+  --text: #e7edf7;
+  --muted: #93a6c2;
+  --gold: #e9b44c;
+  --gold-ink: #1a1305;
+  --ok: #62c790;
+  --bad: #e26d5f;
+  --warn: #e9b44c;
+  --radius: 10px;
+}
+* { box-sizing: border-box; }
+html, body { margin: 0; height: 100%; }
+body {
+  background: var(--bg);
+  color: var(--text);
+  font: 15px/1.55 "Segoe UI Variable Text", "Segoe UI", system-ui, -apple-system, sans-serif;
+}
+button, input, select { font: inherit; color: inherit; }
+.shell { display: grid; grid-template-columns: 236px minmax(0, 1fr); min-height: 100%; }
+
+.rail {
+  background: var(--rail);
+  border-right: 1px solid var(--line);
+  padding: 28px 18px;
+  position: sticky; top: 0; height: 100vh;
+  display: flex; flex-direction: column; gap: 28px;
+}
+.brand { display: flex; align-items: center; gap: 14px; padding: 0 8px; }
+.orb {
+  width: 34px; height: 34px; border-radius: 50%;
+  border: 2px solid var(--muted);
+  display: grid; place-items: center; flex: none;
+  transition: border-color .3s;
+}
+.orb::after { content: ""; width: 12px; height: 12px; border-radius: 50%; background: var(--muted); transition: background .3s; }
+.orb.live { border-color: var(--gold); }
+.orb.live::after { background: var(--gold); animation: beat 2.6s ease-in-out infinite; }
+@keyframes beat { 0%, 100% { transform: scale(.85); opacity: .75; } 50% { transform: scale(1.15); opacity: 1; } }
+@media (prefers-reduced-motion: reduce) { .orb.live::after { animation: none; } }
+.brand b { font-size: 21px; font-weight: 650; letter-spacing: .01em; }
+.brand span { display: block; font-size: 12.5px; color: var(--muted); margin-top: -2px; }
+
+nav { display: flex; flex-direction: column; gap: 4px; }
+nav button {
+  text-align: left; background: none; border: 0; border-radius: 8px;
+  padding: 10px 12px; color: var(--muted); cursor: pointer;
+}
+nav button:hover { color: var(--text); background: rgba(255,255,255,.04); }
+nav button[aria-current="page"] { color: var(--text); background: var(--surface); box-shadow: inset 3px 0 0 var(--gold); }
+nav button:focus-visible, .btn:focus-visible, input:focus-visible, select:focus-visible, summary:focus-visible {
+  outline: 2px solid var(--gold); outline-offset: 2px;
+}
+.rail-foot { margin-top: auto; padding: 0 8px; font-size: 12.5px; color: var(--muted); }
+
+main { padding: 40px clamp(20px, 5vw, 64px) 96px; max-width: 980px; width: 100%; }
+h1 { font-size: 28px; line-height: 1.2; margin: 0 0 6px; font-weight: 650; }
+h2 { font-size: 17px; margin: 0; font-weight: 640; }
+.lead { color: var(--muted); margin: 0 0 30px; max-width: 62ch; }
+.view[hidden] { display: none; }
+
+.summary {
+  display: flex; align-items: center; gap: 12px; flex-wrap: wrap;
+  padding: 14px 16px; margin-bottom: 26px;
+  border: 1px solid var(--line); border-left: 3px solid var(--gold); border-radius: var(--radius);
+  background: var(--surface);
+}
+.summary.ready { border-left-color: var(--ok); }
+.summary p { margin: 0; flex: 1 1 260px; }
+.summary .actions { display: flex; gap: 8px; }
+
+.btn {
+  border: 1px solid var(--line); background: transparent; border-radius: 8px;
+  padding: 9px 16px; cursor: pointer; transition: background .15s, border-color .15s;
+}
+.btn:hover { border-color: var(--muted); background: rgba(255,255,255,.04); }
+.btn.primary { background: var(--gold); border-color: var(--gold); color: var(--gold-ink); font-weight: 620; }
+.btn.primary:hover { filter: brightness(1.08); }
+.btn:disabled { opacity: .45; cursor: not-allowed; }
+.btn.small { padding: 5px 11px; font-size: 13.5px; }
+.btn.danger:hover { border-color: var(--bad); color: var(--bad); }
+
+.section { border-top: 1px solid var(--line); padding: 22px 0; }
+.section:last-of-type { border-bottom: 1px solid var(--line); }
+.sec-head { display: flex; align-items: center; gap: 12px; margin-bottom: 4px; }
+summary::-webkit-details-marker { display: none; }
+.sec-head::after {
+  content: ""; margin-left: auto; width: 8px; height: 8px; flex: none;
+  border-right: 2px solid var(--muted); border-bottom: 2px solid var(--muted);
+  transform: rotate(45deg); transition: transform .2s;
+}
+details[open] > .sec-head::after { transform: rotate(-135deg); }
+.dot { width: 10px; height: 10px; border-radius: 50%; background: var(--line); flex: none; }
+.dot.ok { background: var(--ok); }
+.dot.todo { background: var(--warn); }
+.dot.bad { background: var(--bad); }
+.tag { font-size: 12.5px; color: var(--muted); border: 1px solid var(--line); border-radius: 20px; padding: 1px 10px; }
+.sec-desc { color: var(--muted); margin: 2px 0 16px 22px; max-width: 64ch; }
+.fields { display: grid; grid-template-columns: repeat(auto-fit, minmax(270px, 1fr)); gap: 16px 22px; margin-left: 22px; }
+.field label { display: block; font-size: 13.5px; color: var(--muted); margin-bottom: 5px; }
+.field input, .field select {
+  width: 100%; background: #0b1626; border: 1px solid var(--line); border-radius: 8px; padding: 9px 11px;
+}
+.field input:focus, .field select:focus { border-color: var(--gold); }
+.field small { display: block; margin-top: 5px; color: var(--muted); font-size: 12.5px; line-height: 1.4; }
+.row { display: flex; gap: 10px; align-items: center; flex-wrap: wrap; margin: 18px 0 0 22px; }
+.msg { font-size: 14px; }
+.msg.ok { color: var(--ok); } .msg.bad { color: var(--bad); }
+.tg-flow { margin: 16px 0 0 22px; padding: 14px 16px; border: 1px dashed var(--line); border-radius: var(--radius); display: grid; gap: 12px; max-width: 460px; }
+.help-links { margin: 0 0 0 22px; padding: 0; list-style: none; display: flex; gap: 18px; flex-wrap: wrap; font-size: 13.5px; }
+a { color: var(--gold); }
+
+.toolbar { display: flex; gap: 10px; flex-wrap: wrap; align-items: center; margin-bottom: 26px; }
+.toolbar input[type=search] { flex: 1 1 260px; background: #0b1626; border: 1px solid var(--line); border-radius: 8px; padding: 9px 12px; }
+.chip { border: 1px solid var(--line); background: none; border-radius: 20px; padding: 6px 14px; cursor: pointer; color: var(--muted); }
+.chip[aria-pressed="true"] { color: var(--gold-ink); background: var(--gold); border-color: var(--gold); font-weight: 600; }
+.cat { margin-bottom: 34px; }
+.cat h2 { margin-bottom: 10px; padding-bottom: 8px; border-bottom: 1px solid var(--line); }
+.item { padding: 14px 0; border-bottom: 1px solid rgba(34,50,77,.55); }
+.item-top { display: flex; gap: 10px; align-items: baseline; flex-wrap: wrap; }
+.item-top h3 { margin: 0; font-size: 15.5px; font-weight: 620; }
+.status { font-size: 13px; color: var(--muted); }
+.status.ok { color: var(--ok); } .status.todo { color: var(--warn); }
+.item p { margin: 4px 0 6px; color: #c3cfe2; max-width: 74ch; }
+.ex { display: flex; gap: 8px 16px; flex-wrap: wrap; color: var(--muted); font-style: italic; font-size: 14px; }
+.safety li { margin-bottom: 8px; max-width: 74ch; }
+.empty { color: var(--muted); padding: 24px 0; }
+
+table { width: 100%; border-collapse: collapse; margin: 6px 0 22px; }
+th { text-align: left; font-weight: 500; color: var(--muted); font-size: 13.5px; padding: 8px 10px; border-bottom: 1px solid var(--line); }
+td { padding: 10px; border-bottom: 1px solid rgba(34,50,77,.55); word-break: break-all; }
+td.name { font-weight: 620; word-break: normal; }
+.add-voice { display: flex; gap: 12px; flex-wrap: wrap; align-items: flex-end; }
+.add-voice .field { flex: 1 1 200px; }
+
+.comp { display: flex; align-items: center; gap: 12px; padding: 11px 0; border-bottom: 1px solid rgba(34,50,77,.55); }
+.comp .state { margin-left: auto; color: var(--muted); font-size: 14px; }
+.toast {
+  position: fixed; right: 22px; bottom: 22px; max-width: 360px; padding: 12px 16px;
+  background: var(--surface); border: 1px solid var(--line); border-left: 3px solid var(--gold); border-radius: var(--radius);
+  box-shadow: 0 10px 30px rgba(0,0,0,.4);
+}
+.toast[hidden] { display: none; }
+
+@media (max-width: 760px) {
+  .shell { grid-template-columns: 1fr; }
+  .rail { position: static; height: auto; flex-direction: row; flex-wrap: wrap; align-items: center; padding: 14px 16px; gap: 14px; }
+  nav { flex-direction: row; flex-wrap: wrap; }
+  .rail-foot { display: none; }
+  main { padding: 26px 16px 80px; }
+  .fields, .sec-desc, .row, .tg-flow, .help-links { margin-left: 0; }
+}
+</style>
+</head>
+<body>
+<div class="shell">
+  <aside class="rail">
+    <div class="brand">
+      <div class="orb" id="orb" aria-hidden="true"></div>
+      <div><b>Джарвис</b><span id="orb-label">проверяю…</span></div>
+    </div>
+    <nav aria-label="Разделы">
+      <button data-view="setup" aria-current="page">Настройка</button>
+      <button data-view="caps">Возможности</button>
+      <button data-view="voices">Голоса</button>
+      <button data-view="camera">Камера</button>
+      <button data-view="status">Состояние</button>
+    </nav>
+    <div class="rail-foot">Панель доступна только на этом компьютере.</div>
+  </aside>
+
+  <main>
+    <section class="view" id="view-setup">
+      <h1>Настройка</h1>
+      <p class="lead">Укажите ключи один раз — дальше Джарвис запускается сам. Для голосового помощника обязательны только два ключа: Claude и Deepgram.</p>
+      <div class="summary" id="summary"><p>Загружаю…</p></div>
+      <div id="sections"></div>
+    </section>
+
+    <section class="view" id="view-caps" hidden>
+      <h1>Возможности</h1>
+      <p class="lead" id="caps-lead">Всё, что Джарвис умеет, с примерами фраз и отметкой, что уже работает на этом компьютере.</p>
+      <div class="toolbar">
+        <input type="search" id="caps-search" placeholder="Поиск по возможностям" aria-label="Поиск по возможностям">
+        <button class="chip" data-filter="all" aria-pressed="true">Все</button>
+        <button class="chip" data-filter="ok" aria-pressed="false">Готово</button>
+        <button class="chip" data-filter="todo" aria-pressed="false">Нужна настройка</button>
+      </div>
+      <div id="caps"></div>
+    </section>
+
+    <section class="view" id="view-voices" hidden>
+      <h1>Голоса</h1>
+      <p class="lead">Сохранённые голоса ElevenLabs. Скажите «смени голос на …» с любым из этих имён — переключится со следующей реплики, без перезапуска.</p>
+      <div id="voices-note"></div>
+      <table id="voices-table"><thead><tr><th>Имя</th><th>ID голоса</th><th></th></tr></thead><tbody></tbody></table>
+      <h2 style="margin-bottom:12px">Добавить голос</h2>
+      <form class="add-voice" id="voice-form">
+        <div class="field"><label for="v-name">Как его называть голосом</label><input id="v-name" required placeholder="например, Николай"></div>
+        <div class="field"><label for="v-id">ID голоса из ElevenLabs</label><input id="v-id" required placeholder="20 символов, латиница и цифры" autocomplete="off"></div>
+        <button class="btn primary" type="submit">Добавить</button>
+      </form>
+      <p class="sec-desc" style="margin-left:0;margin-top:12px">ID берётся в ElevenLabs: Voices → нужный голос → значок «ID». Голос должен быть в вашем аккаунте.</p>
+    </section>
+
+    <section class="view" id="view-camera" hidden>
+      <h1>Камера <span class="tag" style="font-size:13px;vertical-align:middle">бета</span></h1>
+      <p class="lead">Эта камера открывается, когда вы говорите «открой камеру» или «посмотри что на камере». Список — то, что прямо сейчас видит Windows. Функция новая: распознавание сильно зависит от камеры и её драйверов — если ничего не находится, см. подсказку ниже.</p>
+      <div id="camera-note"></div>
+      <table id="camera-table"><thead><tr><th>Камера</th><th></th></tr></thead><tbody></tbody></table>
+      <div class="row" style="margin-left:0">
+        <button class="btn" id="camera-refresh">Обновить список</button>
+        <button class="btn" id="camera-reset">Сбросить на первую найденную</button>
+      </div>
+    </section>
+
+    <section class="view" id="view-status" hidden>
+      <h1>Состояние</h1>
+      <p class="lead">Что сейчас запущено. Перезапустить всё можно значком Джарвиса в трее.</p>
+      <div id="components"></div>
+      <div class="row" style="margin-left:0"><button class="btn" id="refresh">Обновить</button></div>
+    </section>
+  </main>
+</div>
+<div class="toast" id="toast" role="status" hidden></div>
+
+<script>
+"use strict";
+const params = new URLSearchParams(location.search);
+if (params.get("t")) { sessionStorage.setItem("panelToken", params.get("t")); history.replaceState(null, "", location.pathname); }
+const TOKEN = sessionStorage.getItem("panelToken") || "";
+
+async function api(path, opts = {}) {
+  const res = await fetch(path, {
+    method: opts.method || "GET",
+    headers: { "X-Panel-Token": TOKEN, "Content-Type": "application/json" },
+    body: opts.body ? JSON.stringify(opts.body) : undefined,
+  });
+  let data = {};
+  try { data = await res.json(); } catch (_) {}
+  if (res.status === 401) throw new Error("Панель не узнала этот браузер — откройте её заново через «Запустить панель» или значок в трее.");
+  if (!res.ok) throw new Error(data.detail || ("Ошибка " + res.status));
+  return data;
+}
+
+function h(tag, attrs, ...kids) {
+  const el = document.createElement(tag);
+  for (const [k, v] of Object.entries(attrs || {})) {
+    if (k === "class") el.className = v;
+    else if (k.startsWith("on")) el.addEventListener(k.slice(2), v);
+    else if (v !== false && v != null) el.setAttribute(k, v === true ? "" : v);
+  }
+  for (const kid of kids.flat()) if (kid != null) el.append(kid.nodeType ? kid : document.createTextNode(kid));
+  return el;
+}
+
+let toastTimer;
+function toast(text) {
+  const t = document.getElementById("toast");
+  t.textContent = text; t.hidden = false;
+  clearTimeout(toastTimer); toastTimer = setTimeout(() => (t.hidden = true), 5200);
+}
+
+/* ---------- navigation ---------- */
+const views = ["setup", "caps", "voices", "camera", "status"];
+function show(view) {
+  for (const v of views) document.getElementById("view-" + v).hidden = v !== view;
+  document.querySelectorAll("nav button").forEach(b => b.dataset.view === view ? b.setAttribute("aria-current", "page") : b.removeAttribute("aria-current"));
+  if (view === "setup") loadSetup();
+  if (view === "caps") loadCaps();
+  if (view === "voices") loadVoices();
+  if (view === "camera") loadCamera();
+  if (view === "status") loadStatus();
+}
+document.querySelectorAll("nav button").forEach(b => b.addEventListener("click", () => show(b.dataset.view)));
+
+/* ---------- setup ---------- */
+const GROUPS = [
+  { id: "claude", title: "Мозг: Claude", required: true, test: "anthropic",
+    desc: "Claude отвечает на ваши слова и решает, какие действия выполнить. Проверка делает запрос на один токен — это доли цента, зато сразу видно, есть ли деньги на балансе.",
+    links: [["Получить ключ", "https://console.anthropic.com/settings/keys"], ["Пополнить баланс", "https://console.anthropic.com/settings/billing"]] },
+  { id: "openai", title: "Мозг: GPT-6 (необязательно)", test: "openai",
+    desc: "По умолчанию и разговор, и управление экраном ведёт Claude. Здесь можно переключить любое из двух на GPT-6 Sol/Luna — независимо друг от друга.",
+    links: [["Получить ключ", "https://platform.openai.com/api-keys"]] },
+  { id: "stt", title: "Слух: распознавание речи", required: true, test: "deepgram",
+    desc: "Deepgram превращает вашу речь в текст в реальном времени.",
+    links: [["Получить ключ", "https://console.deepgram.com/"]] },
+  { id: "tts", title: "Голос: озвучка", test: "elevenlabs",
+    desc: "Без ключей работает бесплатная озвучка Edge. ElevenLabs звучит живее и позволяет использовать клонированные голоса.",
+    links: [["Ключ ElevenLabs", "https://elevenlabs.io/app/settings/api-keys"]] },
+  { id: "telegram", title: "Telegram", test: "telegram",
+    desc: "Нужен отдельный аккаунт для Джарвиса (с отдельным номером). Он сможет писать людям от своего имени, отвечать вам в чате и присылать предупреждения о состоянии компьютера.",
+    links: [["Получить api_id и api_hash", "https://my.telegram.org/apps"]] },
+  { id: "livekit", title: "Телефон: LiveKit", test: "livekit",
+    desc: "Только если хотите, чтобы Джарвис отвечал на звонки. Номер и правило маршрутизации создаются в кабинете LiveKit — пошаговая инструкция в docs/SETUP.md.",
+    links: [["Кабинет LiveKit", "https://cloud.livekit.io/"]] },
+  { id: "extra", title: "Дополнительно", desc: "Клавиши, устройства ввода-вывода, фоновые задачи.", links: [] },
+];
+let setupData = null;
+
+async function loadSetup() {
+  try {
+    const [cfg, st] = await Promise.all([api("/api/config"), api("/api/status")]);
+    setupData = cfg; renderSetup(cfg, st); paintRail(st);
+  } catch (e) { document.getElementById("summary").replaceChildren(h("p", {}, e.message)); }
+}
+
+function paintRail(st) {
+  const live = st.running;
+  document.getElementById("orb").classList.toggle("live", live);
+  document.getElementById("orb-label").textContent = live ? "работает" : "остановлен";
+}
+
+function renderSetup(cfg, st) {
+  const summary = document.getElementById("summary");
+  summary.className = "summary" + (st.ready_to_start ? " ready" : "");
+  const missing = st.checks.filter(c => c.required && !c.ok).map(c => c.label);
+  summary.replaceChildren(
+    h("p", {}, st.running ? "Джарвис работает. Изменения настроек применятся после перезапуска — значок в трее → «Перезапустить»."
+      : st.ready_to_start ? "Обязательные ключи на месте — можно запускать."
+      : "Осталось указать: " + missing.join(", ") + "."),
+    h("div", { class: "actions" },
+      h("button", { class: "btn primary", disabled: !st.ready_to_start || st.running, onclick: () => act("/api/start") }, "Запустить Джарвиса"),
+      h("button", { class: "btn", disabled: !st.running, onclick: () => act("/api/stop") }, "Остановить")));
+
+  const host = document.getElementById("sections");
+  const open = new Set([...host.querySelectorAll("details[open]")].map(d => d.dataset.group));
+  const first = !host.children.length;
+  host.replaceChildren(...GROUPS.map(g => renderGroup(g, cfg, st, first ? (g.required || g.id === "tts") : open.has(g.id))));
+}
+
+function statusFor(g, cfg, st) {
+  const keys = cfg.fields.filter(f => f.group === g.id);
+  const req = keys.filter(f => f.secret || f.key === "TELEGRAM_API_ID" || f.key === "LIVEKIT_URL");
+  if (g.id === "extra") return "";
+  if (g.id === "tts") return (keys.find(f => f.key === "TTS_PROVIDER").value || "edge") === "edge" || keys.find(f => f.key === "ELEVENLABS_API_KEY").is_set ? "ok" : "todo";
+  if (g.id === "telegram") return st.checks.find(c => c.id === "telegram").ok ? "ok" : (req.some(f => f.is_set) ? "todo" : "");
+  return req.length && req.every(f => f.is_set) ? "ok" : (g.required ? "todo" : "");
+}
+
+function renderGroup(g, cfg, st, isOpen) {
+  const fields = cfg.fields.filter(f => f.group === g.id);
+  const inputs = {};
+  const msg = h("span", { class: "msg" });
+  const grid = h("div", { class: "fields" }, fields.map(f => {
+    let control;
+    if (f.type === "select") {
+      control = h("select", { id: "f-" + f.key }, f.options.map(([v, label]) => h("option", { value: v, selected: (f.value || f.options[0][0]) === v }, label)));
+    } else {
+      control = h("input", { id: "f-" + f.key, type: f.secret ? "password" : "text", value: f.secret ? "" : f.value,
+        placeholder: f.secret && f.is_set ? f.value + " (сохранён)" : (f.placeholder || ""), autocomplete: "off", spellcheck: "false" });
+    }
+    inputs[f.key] = control;
+    return h("div", { class: "field" }, h("label", { for: "f-" + f.key }, f.label + (f.required ? " *" : "")), control, f.help ? h("small", {}, f.help) : null);
+  }));
+
+  async function save() {
+    const values = {};
+    for (const [k, el] of Object.entries(inputs)) values[k] = el.value;
+    await api("/api/config", { method: "POST", body: { values } });
+  }
+  async function saveAndTest(btn) {
+    btn.disabled = true; msg.className = "msg"; msg.textContent = "Сохраняю и проверяю…";
+    try {
+      await save();
+      if (g.test) {
+        const r = await api("/api/test/" + g.test, { method: "POST" });
+        msg.className = "msg " + (r.ok ? "ok" : "bad"); msg.textContent = r.message;
+      } else { msg.className = "msg ok"; msg.textContent = "Сохранено."; }
+      const [cfg2, st2] = await Promise.all([api("/api/config"), api("/api/status")]);
+      setupData = cfg2; refreshSummaryOnly(cfg2, st2);
+    } catch (e) { msg.className = "msg bad"; msg.textContent = e.message; }
+    btn.disabled = false;
+  }
+
+  const dotState = statusFor(g, cfg, st);
+  const body = [h("p", { class: "sec-desc" }, g.desc), grid];
+  const saveBtn = h("button", { class: "btn primary", onclick: e => saveAndTest(e.currentTarget) }, g.test ? "Сохранить и проверить" : "Сохранить");
+  body.push(h("div", { class: "row" }, saveBtn, msg));
+  if (g.id === "telegram") body.push(telegramFlow(save, msg));
+  if (g.links.length) body.push(h("ul", { class: "help-links", style: "margin-top:16px" }, g.links.map(([t, u]) => h("li", {}, h("a", { href: u, target: "_blank", rel: "noopener" }, t)))));
+
+  return h("details", { class: "section", "data-group": g.id, open: isOpen },
+    h("summary", { class: "sec-head", style: "list-style:none;cursor:pointer" },
+      h("span", { class: "dot " + dotState }), h("h2", {}, g.title), g.required ? null : h("span", { class: "tag" }, "необязательно")),
+    ...body);
+}
+
+function refreshSummaryOnly(cfg, st) {
+  const summary = document.getElementById("summary");
+  const btns = summary.querySelectorAll("button");
+  summary.className = "summary" + (st.ready_to_start ? " ready" : "");
+  const missing = st.checks.filter(c => c.required && !c.ok).map(c => c.label);
+  summary.querySelector("p").textContent = st.running ? "Джарвис работает. Изменения применятся после перезапуска — значок в трее → «Перезапустить»."
+    : st.ready_to_start ? "Обязательные ключи на месте — можно запускать." : "Осталось указать: " + missing.join(", ") + ".";
+  if (btns[0]) btns[0].disabled = !st.ready_to_start || st.running;
+  document.querySelectorAll("details.section").forEach(d => {
+    const g = GROUPS.find(x => x.id === d.dataset.group);
+    d.querySelector(".dot").className = "dot " + statusFor(g, cfg, st);
+  });
+}
+
+function telegramFlow(save, outerMsg) {
+  const phone = h("input", { id: "tg-phone", type: "tel", placeholder: "+380…", autocomplete: "off" });
+  const code = h("input", { id: "tg-code", inputmode: "numeric", placeholder: "Код из Telegram", autocomplete: "one-time-code", hidden: true });
+  const pass = h("input", { id: "tg-pass", type: "password", placeholder: "Пароль двухфакторной защиты", hidden: true });
+  const msg = h("span", { class: "msg" });
+  const send = h("button", { class: "btn", type: "button" }, "Войти в Telegram");
+  const confirm = h("button", { class: "btn primary", type: "button", hidden: true }, "Подтвердить код");
+  const current = (setupData.fields.find(f => f.key === "TELEGRAM_PHONE") || {}).value;
+  if (current) phone.value = current;
+  const say = (ok, text) => { msg.className = "msg " + (ok ? "ok" : "bad"); msg.textContent = text; };
+
+  send.onclick = async () => {
+    send.disabled = true; say(true, "Запрашиваю код…");
+    try {
+      const apiId = document.getElementById("f-TELEGRAM_API_ID").value, hash = document.getElementById("f-TELEGRAM_API_HASH").value;
+      await api("/api/config", { method: "POST", body: { values: { TELEGRAM_API_ID: apiId, TELEGRAM_API_HASH: hash, TELEGRAM_PHONE: phone.value } } });
+      const r = await api("/api/telegram/send_code", { method: "POST", body: { phone: phone.value } });
+      say(r.ok, r.message);
+      if (r.ok && !r.already) { code.hidden = false; confirm.hidden = false; code.focus(); }
+    } catch (e) { say(false, e.message); }
+    send.disabled = false;
+  };
+  confirm.onclick = async () => {
+    confirm.disabled = true;
+    try {
+      const r = await api("/api/telegram/sign_in", { method: "POST", body: { code: code.value, password: pass.value } });
+      if (r.needs_password) { pass.hidden = false; pass.focus(); }
+      say(r.ok, r.message);
+      if (r.ok) { code.hidden = pass.hidden = confirm.hidden = true; loadSetup(); }
+    } catch (e) { say(false, e.message); }
+    confirm.disabled = false;
+  };
+  return h("div", { class: "tg-flow" },
+    h("div", { class: "field" }, h("label", { for: "tg-phone" }, "Вход в аккаунт Джарвиса (нужен один раз)"), phone),
+    code, pass, h("div", { class: "row", style: "margin:0" }, send, confirm), msg);
+}
+
+async function act(path) {
+  try { const r = await api(path, { method: "POST" }); toast(r.message); setTimeout(loadSetup, 2500); }
+  catch (e) { toast(e.message); }
+}
+
+/* ---------- capabilities ---------- */
+let capsData = null, capsFilter = "all";
+async function loadCaps() {
+  try { capsData = await api("/api/capabilities"); renderCaps(); }
+  catch (e) { document.getElementById("caps").replaceChildren(h("p", { class: "empty" }, e.message)); }
+}
+document.querySelectorAll(".chip").forEach(c => c.addEventListener("click", () => {
+  capsFilter = c.dataset.filter;
+  document.querySelectorAll(".chip").forEach(x => x.setAttribute("aria-pressed", String(x === c)));
+  renderCaps();
+}));
+document.getElementById("caps-search").addEventListener("input", () => capsData && renderCaps());
+
+function plural(n, one, few, many) {
+  const m10 = n % 10, m100 = n % 100;
+  return m10 === 1 && m100 !== 11 ? one : (m10 >= 2 && m10 <= 4 && (m100 < 12 || m100 > 14)) ? few : many;
+}
+function statusLabel(it) {
+  return it.state === "ok" ? "работает" : it.state === "todo" ? it.note : it.note ? "недоступно: " + it.note : "недоступно";
+}
+function renderCaps() {
+  const q = document.getElementById("caps-search").value.trim().toLowerCase();
+  const match = it => {
+    if (capsFilter === "ok" && it.state !== "ok") return false;
+    if (capsFilter === "todo" && it.state !== "todo") return false;
+    if (!q) return true;
+    return [it.title, it.blurb, ...(it.examples || [])].join(" ").toLowerCase().includes(q);
+  };
+  const card = it => h("div", { class: "item" },
+    h("div", { class: "item-top" }, h("h3", {}, it.title), h("span", { class: "status " + it.state }, statusLabel(it))),
+    h("p", {}, it.blurb),
+    it.examples && it.examples.length ? h("div", { class: "ex" }, it.examples.map(e => h("span", {}, "«" + e + "»"))) : null);
+
+  const out = [];
+  let shown = 0;
+  for (const cat of capsData.categories) {
+    const items = cat.items.filter(match);
+    if (!items.length) continue;
+    shown += items.length;
+    out.push(h("div", { class: "cat" }, h("h2", {}, cat.title), items.map(card)));
+  }
+  const bg = capsData.background.filter(match);
+  if (bg.length) { shown += bg.length; out.push(h("div", { class: "cat" }, h("h2", {}, "Работает в фоне"), bg.map(card))); }
+  if (!q && capsFilter === "all") out.push(h("div", { class: "cat safety" }, h("h2", {}, "Безопасность"), h("ul", {}, capsData.safety.map(s => h("li", {}, s)))));
+  if (!shown) out.unshift(h("p", { class: "empty" }, "Ничего не найдено."));
+  document.getElementById("caps").replaceChildren(...out);
+  if (capsData.tool_count) document.getElementById("caps-lead").textContent =
+    "Всё, что Джарвис умеет (" + capsData.tool_count + " " + plural(capsData.tool_count, "инструмент", "инструмента", "инструментов") + "), с примерами фраз и отметкой, что уже работает на этом компьютере.";
+}
+
+/* ---------- voices ---------- */
+async function loadVoices() {
+  try {
+    const v = await api("/api/voices");
+    const note = document.getElementById("voices-note");
+    note.replaceChildren(v.provider === "elevenlabs" ? "" : h("div", { class: "summary" },
+      h("p", {}, "Сейчас выбрана бесплатная озвучка Edge — смена голоса голосом работает только с ElevenLabs. Переключите озвучку в «Настройке».")));
+    const body = document.querySelector("#voices-table tbody");
+    const names = Object.keys(v.presets);
+    body.replaceChildren(...(names.length ? names.map(n => h("tr", {},
+      h("td", { class: "name" }, n), h("td", {}, v.presets[n] + (v.presets[n] === v.current_voice_id ? "  ← сейчас" : "")),
+      h("td", {}, h("button", { class: "btn small danger", onclick: async () => { await api("/api/voices/" + encodeURIComponent(n), { method: "DELETE" }); loadVoices(); } }, "Удалить"))))
+      : [h("tr", {}, h("td", { colspan: 3, class: "empty" }, "Пока нет сохранённых голосов."))]));
+  } catch (e) { toast(e.message); }
+}
+document.getElementById("voice-form").addEventListener("submit", async ev => {
+  ev.preventDefault();
+  try {
+    const r = await api("/api/voices", { method: "POST", body: { name: document.getElementById("v-name").value, voice_id: document.getElementById("v-id").value } });
+    toast(r.message); ev.target.reset(); loadVoices();
+  } catch (e) { toast(e.message); }
+});
+
+/* ---------- camera ---------- */
+async function loadCamera() {
+  try {
+    const c = await api("/api/camera/devices");
+    const note = document.getElementById("camera-note");
+    if (!c.hud_running) {
+      note.replaceChildren(h("div", { class: "summary" }, h("p", {}, "Джарвис сейчас не запущен — список камер появится, когда он работает.")));
+    } else if (!c.devices.length) {
+      note.replaceChildren(h("div", { class: "summary" }, h("p", {},
+        "Windows не видит ни одной камеры. Проверьте: камера подключена и включена; для экшн-камер и подобных устройств — переключена на самой камере в режим веб-камеры; и разрешён доступ в Параметры Windows → Конфиденциальность и защита → Камера → «Разрешить приложениям для ПК доступ к камере».")));
+    } else {
+      note.replaceChildren();
+    }
+    const body = document.querySelector("#camera-table tbody");
+    body.replaceChildren(...(c.devices.length ? c.devices.map(d => {
+      const isCurrent = d.id === c.current_device_id;
+      return h("tr", {},
+        h("td", { class: "name" }, d.description + (isCurrent ? "  ← сейчас" : "")),
+        h("td", {}, h("button", { class: "btn small" + (isCurrent ? " primary" : ""), disabled: isCurrent, onclick: async e => {
+          e.currentTarget.disabled = true;
+          try { await api("/api/camera/select", { method: "POST", body: { device_id: d.id, description: d.description } }); toast("Камера выбрана."); loadCamera(); }
+          catch (err) { toast(err.message); e.currentTarget.disabled = false; }
+        } }, isCurrent ? "Выбрана" : "Выбрать")));
+    }) : [h("tr", {}, h("td", { colspan: 2, class: "empty" }, "Камер не найдено."))]));
+  } catch (e) { toast(e.message); }
+}
+document.getElementById("camera-refresh").addEventListener("click", loadCamera);
+document.getElementById("camera-reset").addEventListener("click", async () => {
+  try { await api("/api/camera/select", { method: "POST", body: { device_id: "" } }); toast("Сброшено на первую найденную камеру."); loadCamera(); }
+  catch (e) { toast(e.message); }
+});
+
+/* ---------- status ---------- */
+async function loadStatus() {
+  try {
+    const st = await api("/api/status"); paintRail(st);
+    document.getElementById("components").replaceChildren(...st.components.map(c =>
+      h("div", { class: "comp" }, h("span", { class: "dot " + (c.running ? "ok" : "") }), c.label, h("span", { class: "state" }, c.running ? "запущен" : "не запущен"))));
+  } catch (e) { toast(e.message); }
+}
+document.getElementById("refresh").addEventListener("click", loadStatus);
+
+show("setup");
+setInterval(() => { if (!document.hidden) api("/api/status").then(paintRail).catch(() => {}); }, 8000);
+</script>
+</body>
+</html>

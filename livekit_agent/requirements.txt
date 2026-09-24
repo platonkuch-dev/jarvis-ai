@@ -1,0 +1,61 @@
+livekit-agents>=1.0
+livekit-plugins-deepgram>=1.0
+livekit-plugins-anthropic>=1.0
+livekit-plugins-silero>=1.0
+# Optional, used only when TTS_PROVIDER=elevenlabs
+livekit-plugins-elevenlabs>=1.0
+# Optional, used only when LLM_PROVIDER=openai (worker.py's main conversation
+# model) or COMPUTER_USE_PROVIDER=openai (tools/computer_use.py's GPT-6
+# Sol/Luna path) -- see config.py. livekit-plugins-openai pulls in a recent
+# enough `openai` SDK on its own; listed here too since computer_use.py talks
+# to the Responses API directly, not through the livekit plugin.
+livekit-plugins-openai>=1.0
+openai>=2.0
+
+# livekit-plugins-anthropic declares anthropic>=0.41 with no upper bound, but
+# anthropic>=1.0 switched its internal HTTP client away from httpx (to a
+# fork it calls httpx2), which breaks livekit-plugins-anthropic's own
+# httpx.AsyncClient usage at construction time. Pin below 1.0 until the
+# plugin catches up.
+anthropic<1.0
+
+edge-tts>=6.1.0
+python-dotenv>=1.0.0
+httpx>=0.27.0
+psutil>=5.9.0
+pyperclip>=1.8.2
+python-dateutil>=2.9.0
+duckduckgo_search>=6.0.0
+
+# Windows system_control (volume / brightness)
+pycaw>=20240210; sys_platform == "win32"
+comtypes>=1.2.0; sys_platform == "win32"
+screen-brightness-control>=0.24.0; sys_platform == "win32"
+
+# windows_control/ (window_manager / ui_automation tools): native Win32 API,
+# UI Automation, and mouse/keyboard/screenshot fallback.
+pywin32>=306; sys_platform == "win32"
+pywinauto>=0.6.8; sys_platform == "win32"
+pyautogui>=0.9.54
+
+# tools/file_ops.py: deletion goes to the Recycle Bin, never a permanent unlink.
+send2trash>=1.8.0
+
+# take_screenshot
+Pillow>=10.0.0
+
+# app.py tray icon
+pystray>=0.19.0
+
+# F10 global wake hotkey (worker.py)
+keyboard>=0.13.5
+
+# hud_bar.py: compact status bar ported from the original Jarvis desktop app
+PyQt6>=6.6.0
+
+# web_api.py (backend for web/, the React frontend)
+fastapi>=0.110.0
+uvicorn[standard]>=0.29.0
+
+# tools/telegram_dm.py: MTProto client for a real (non-bot) Telegram account
+telethon>=1.36.0
