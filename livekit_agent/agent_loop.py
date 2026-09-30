@@ -92,6 +92,12 @@ async def run(
 ) -> tuple[str, list[dict]]:
     """Runs until the model answers without calling a tool. Returns (final
     text, full message list including `history`)."""
+    if config.SUBSCRIPTION_MODE:
+        return await _run_claude_code(
+            system_text=system_text, tools_param=tools_param, history=history, user_text=user_text,
+            max_steps=max_steps, source=source, gate=gate, extra_tools=extra_tools or {},
+            should_stop=should_stop, on_step=on_step,
+        )
     model = model or config.ANTHROPIC_MODEL
     extra_tools = extra_tools or {}
     system_blocks = [{"type": "text", "text": system_text, "cache_control": {"type": "ephemeral"}}]
@@ -130,3 +136,59 @@ async def run(
         messages.append({"role": "user", "content": result_blocks})
 
     return "Не получилось закончить за разумное число шагов.", messages
+
+
+# --------------------------------------------------------------------------- subscription path
+
+_CC_TOOLS_NOTE = ("\n\nИнструменты, о которых говорится выше, доступны тебе как mcp__t__<имя> "
+                  "(например mcp__t__browser_task).")
+
+
+def _history_text(history: list[dict], limit: int = 30) -> str:
+    """The text of earlier turns (tool calls/results dropped) -- Claude Code
+    gets the conversation as a transcript instead of raw API messages."""
+    lines = []
+    for msg in history[-limit:]:
+        content = msg.get("content")
+        if isinstance(content, str):
+            text = content
+        else:
+            text = " ".join(b.get("text", "") for b in content or []
+                            if isinstance(b, dict) and b.get("type") == "text")
+        text = text.strip()
+        if text:
+            lines.append(f"{'Собеседник' if msg.get('role') == 'user' else 'Ты'}: {text}")
+    return "\n".join(lines)
+
+
+async def _run_claude_code(
+    *, system_text: str, tools_param: list[dict], history: list[dict], user_text: str, max_steps: int,
+    source: str, gate: Gate | None, extra_tools: dict[str, ExtraTool],
+    should_stop: Callable[[], bool] | None, on_step: Callable[[str], None] | None,
+) -> tuple[str, list[dict]]:
+    import cc_agent
+
+    def make_handler(name: str):
+        async def handler(args: dict) -> dict:
+            if on_step is not None:
+                on_step(f"{name}({json.dumps(args, ensure_ascii=False)[:200]})")
+            result = await _call_tool(name, args, gate, extra_tools)
+            if result.get("status") in ("error", "denied"):
+                raise cc_agent.ToolFailed(json.dumps(result, ensure_ascii=False, default=str)[:8000])
+            return result
+        return handler
+
+    tools = [cc_agent.MCPTool(t["name"], t.get("description", ""), t["input_schema"], make_handler(t["name"]))
+             for t in tools_param]
+    past = _history_text(history)
+    prompt = f"Предыдущий разговор:\n{past}\n\nНовое сообщение:\n{user_text}" if past else user_text
+    model = config.CLAUDE_CODE_AGENT_MODEL if source == "task" else config.CLAUDE_CODE_MODEL
+    try:
+        text = await cc_agent.run(
+            prompt=prompt, system=system_text + (_CC_TOOLS_NOTE if tools else ""), tools=tools,
+            model=model, max_turns=max_steps + 1, should_stop=should_stop,
+        )
+    except cc_agent.RunFailed as exc:
+        text = f"Не получилось: {exc}"
+    text = text or "..."
+    return text, history + [{"role": "user", "content": user_text}, {"role": "assistant", "content": text}]

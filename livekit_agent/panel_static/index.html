@@ -304,7 +304,13 @@ const GROUPS = [
   { id: "livekit", title: "Телефон: LiveKit", test: "livekit",
     desc: "Только если хотите, чтобы Джарвис отвечал на звонки. Номер и правило маршрутизации создаются в кабинете LiveKit — пошаговая инструкция в docs/SETUP.md.",
     links: [["Кабинет LiveKit", "https://cloud.livekit.io/"]] },
-  { id: "extra", title: "Дополнительно", desc: "Клавиши, устройства ввода-вывода, фоновые задачи.", links: [] },
+  { id: "home", title: "Умный дом: Home Assistant",
+    desc: "Свет, розетки, климат, шторы и сцены голосом — через ваш Home Assistant (он уже умеет Hue, Tuya, Xiaomi, Zigbee, Matter и сотни других).",
+    links: [["Что такое Home Assistant", "https://www.home-assistant.io/"]] },
+  { id: "mail", title: "Почта",
+    desc: "Джарвис читает входящие (не помечая прочитанными) и отправляет письма только после вашего «да, подтверждаю».",
+    links: [["Пароль приложения Gmail", "https://myaccount.google.com/apppasswords"]] },
+  { id: "extra", title: "Дополнительно", desc: "Клавиши, пробуждение голосом, новости, устройства ввода-вывода, фоновые задачи.", links: [] },
 ];
 let setupData = null;
 

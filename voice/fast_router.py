@@ -96,6 +96,27 @@ def _screenshot(_m: re.Match) -> str:
     return computer_settings(parameters={"action": "screenshot"})
 
 
+def _system_status(_m: re.Match) -> str:
+    from actions.system_monitor import get_system_status
+    status = get_system_status()
+    return (
+        f"CPU {status['cpu_percent']}%. RAM {status['ram_percent']}%. "
+        f"GPU {status['gpu_percent'] if status['gpu_percent'] is not None else 'unavailable'}%."
+    )
+
+
+def _system_diagnostics(_m: re.Match) -> str:
+    from actions.system_diagnostics import system_diagnostics
+    return system_diagnostics()
+
+
+def _jarvis_control(action: str) -> FastHandler:
+    def handler(_m: re.Match) -> str:
+        from actions.jarvis_control import jarvis_control
+        return jarvis_control({"action": action})
+    return handler
+
+
 # Zero-argument handlers, addressable by intent name instead of by regex
 # match — reused by voice/intent_classifier.py's MiniLM fuzzy-match tier so
 # a paraphrase like "подними звук" dispatches through the exact same code
@@ -108,12 +129,50 @@ INTENT_DISPATCH: dict[str, FastHandler] = {
     "minimize": _minimize_active,
     "maximize": _maximize_active,
     "close_active": _close_active,
+    "system_status": _system_status,
+    "system_diagnostics": _system_diagnostics,
 }
 
 
 # Order matters: more specific patterns must come before their generic
 # fallbacks (e.g. "закрой программу" — no name — before "закрой <app>").
 _RULES: list[FastRule] = [
+    FastRule(
+        re.compile(r"^(?:покажи|какой|проверь)?\s*(?:статус|состояние)\s+(?:компьютера|системы|пк)$", re.I),
+        _system_status, "system_status",
+    ),
+    FastRule(
+        re.compile(r"^(?:проведи|запусти|сделай)\s+(?:полную\s+)?диагностику(?:\s+(?:компьютера|системы|пк))?$", re.I),
+        _system_diagnostics, "system_diagnostics",
+    ),
+    FastRule(
+        re.compile(r"^(?:покажи|открой)\s+(?:мои\s+)?задачи$", re.I),
+        _jarvis_control("task_list"), "task_list",
+    ),
+    FastRule(
+        re.compile(r"^включи\s+(?:режим\s+)?фокуса$", re.I),
+        _jarvis_control("focus_on"), "focus_on",
+    ),
+    FastRule(
+        re.compile(r"^выключи\s+(?:режим\s+)?фокуса$", re.I),
+        _jarvis_control("focus_off"), "focus_off",
+    ),
+    FastRule(
+        re.compile(r"^включи\s+(?:qwen|квен)(?:\s+режим)?$", re.I),
+        _jarvis_control("qwen_on"), "qwen_on",
+    ),
+    FastRule(
+        re.compile(r"^выключи\s+(?:qwen|квен)(?:\s+режим)?$", re.I),
+        _jarvis_control("qwen_off"), "qwen_off",
+    ),
+    FastRule(
+        re.compile(r"^включи\s+(?:power\s*mode|пауэр\s*мод|режим\s+питания)$", re.I),
+        _jarvis_control("power_on"), "power_on",
+    ),
+    FastRule(
+        re.compile(r"^выключи\s+(?:power\s*mode|пауэр\s*мод|режим\s+питания)$", re.I),
+        _jarvis_control("power_off"), "power_off",
+    ),
     FastRule(
         re.compile(r"^(?:открой|запусти|включи)\s+папку\s+(?P<folder>downloads|загрузки|desktop|рабочий стол|documents|документы)$", re.I),
         _open_folder, "open_folder",

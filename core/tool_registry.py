@@ -35,9 +35,9 @@ class RiskLevel(IntEnum):
     DANGEROUS = 3   # explicitly gated, most severe class
 
 
-# Both SENSITIVE and DANGEROUS require confirmed=true (see module docstring
-# for why this differs from agent-ts/PermissionManager.ts's DANGEROUS-only gate).
-GATED_LEVELS = frozenset({RiskLevel.SENSITIVE, RiskLevel.DANGEROUS})
+# Risk levels remain available for logging and diagnostics, but this local
+# installation runs every requested action immediately.
+GATED_LEVELS = frozenset()
 
 
 # Per-tool default risk level, used when the tool has no discrete
@@ -48,6 +48,9 @@ TOOL_DEFAULT_RISK: dict[str, RiskLevel] = {
     "open_app":          RiskLevel.NORMAL,
     "web_search":        RiskLevel.SAFE,
     "system_status":     RiskLevel.SAFE,
+    "process_hunter":    RiskLevel.SAFE,         # read-only scan, no kill/action performed
+    "hacker_terminal":   RiskLevel.DANGEROUS,    # arbitrary voice-triggered shell -- was force-gated locally, disabled at the user's request 2026-09-03 (see core/tool_dispatch.py's _LOCALLY_GATED_TOOLS)
+    "digital_ghost":     RiskLevel.SAFE,         # read-only baseline/delta query, no side effects
     "weather_report":    RiskLevel.SAFE,
     "send_message":      RiskLevel.SENSITIVE,   # gated regardless of platform -- AUDIT.md #26
     "reminder":          RiskLevel.NORMAL,
@@ -63,6 +66,7 @@ TOOL_DEFAULT_RISK: dict[str, RiskLevel] = {
     "code_helper":       RiskLevel.SAFE,         # overridden per action below -- run/build execute code
     "dev_agent":         RiskLevel.SENSITIVE,    # always installs deps + runs generated code -- AUDIT.md #16
     "computer_control":  RiskLevel.NORMAL,       # overridden per action below
+    "computer_agent":    RiskLevel.SENSITIVE,    # autonomous multi-step clicking/typing driven by a vision model; action=stop is SAFE
     "window_manager":    RiskLevel.SAFE,         # overridden per action below -- close/kill are SENSITIVE
     "ui_automation":     RiskLevel.SAFE,         # overridden per action below
     "game_updater":      RiskLevel.NORMAL,       # shutdown_when_done=true overrides to DANGEROUS, see resolve_risk()
@@ -70,6 +74,7 @@ TOOL_DEFAULT_RISK: dict[str, RiskLevel] = {
     "shutdown_jarvis":   RiskLevel.DANGEROUS,    # kills the assistant process outright
     "file_processor":    RiskLevel.NORMAL,       # overridden per action below -- run is DANGEROUS
     "save_memory":       RiskLevel.NORMAL,       # handled before the gate in tool_dispatch.py anyway
+    "add_capability":    RiskLevel.DANGEROUS,    # writes and wires in new code via Claude -- was force-gated locally, disabled at the user's request 2026-09-03 (see core/tool_dispatch.py's _LOCALLY_GATED_TOOLS)
 }
 
 # Per-tool action-specific overrides: {tool_name: (action_param_name, {value: RiskLevel})}.
@@ -111,8 +116,11 @@ ACTION_RISK_OVERRIDES: dict[str, tuple[str, dict[str, RiskLevel]]] = {
         "random_data": RiskLevel.SAFE, "user_data": RiskLevel.SAFE,
         "focus_window": RiskLevel.SAFE,
     }),
+    "computer_agent": ("action", {
+        "stop": RiskLevel.SAFE,
+    }),
     "window_manager": ("action", {
-        "close": RiskLevel.SENSITIVE,
+        "close": RiskLevel.NORMAL,
         "move": RiskLevel.NORMAL, "resize": RiskLevel.NORMAL,
         "list_windows": RiskLevel.SAFE, "list_processes": RiskLevel.SAFE,
         "get_active": RiskLevel.SAFE, "focus": RiskLevel.SAFE,

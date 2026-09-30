@@ -1,0 +1,35 @@
+<!doctype html>
+<html lang="ru">
+<head>
+<meta charset="utf-8">
+<title>__TITLE__</title>
+<style>
+  html, body { margin: 0; height: 100%; overflow: hidden; background: #02060D; }
+  .wait { position: fixed; inset: 0; display: flex; align-items: center; justify-content: center;
+          color: #58748F; font: 500 15px "Segoe UI", sans-serif; letter-spacing: 0.08em; }
+  .wait::before { content: ""; width: 10px; height: 10px; border-radius: 50%; margin-right: 12px;
+                  background: #6FD8FF; box-shadow: 0 0 14px #6FD8FF; animation: pulse 1.6s ease-in-out infinite; }
+  @keyframes pulse { 50% { opacity: 0.3; } }
+</style>
+</head>
+<body>
+<div class="wait" id="wait">Джарвис запускается…</div>
+<script>
+// A Wallpaper Engine web wallpaper. Jarvis's panel server (hud_panel.py) serves the live page on
+// localhost; this starter waits until it answers and then opens that page in place (a nested
+// frame crashes Wallpaper Engine's web renderer). The live page reconnects by itself when Jarvis
+// restarts; if Wallpaper Engine reloads the wallpaper while Jarvis is off, this waits again.
+const TARGET = "__URL__";
+const PING = "http://127.0.0.1:__PORT__/ping";
+async function check() {
+  try {
+    await fetch(PING + "?t=" + Date.now(), { mode: "no-cors", cache: "no-store" });
+    location.replace(TARGET);
+  } catch (e) {
+    setTimeout(check, 3000);
+  }
+}
+check();
+</script>
+</body>
+</html>

@@ -74,3 +74,52 @@ class EndOfSpeechDetector:
         if self._heard_speech and self._silence_ms >= self.config.silence_ms_to_end:
             return True
         return False
+
+
+class SpeechOnsetDetector:
+    """Detects the START of speech during idle listening -- the counterpart
+    to EndOfSpeechDetector's end-of-utterance detection.
+
+    Used by core/fast_path.py's Whisper-based wake-word check instead of
+    openWakeWord's per-frame "hey_jarvis" classifier (voice/wake_word.py,
+    kept in the repo but unused by default): that pretrained model cannot
+    recognize Russian pronunciation at all (measured near-zero confidence
+    against synthesized "Джарвис" clips). Instead of a dedicated wake-word
+    model, this flags any speech onset; core/fast_path.py records the
+    ensuing utterance (via EndOfSpeechDetector, same as before) and checks
+    the transcription itself for "джарвис" -- correct for any language
+    faster-whisper handles, no training required.
+
+    Shares the same underlying Silero VAD engine as EndOfSpeechDetector
+    (openwakeword.VAD, already bundled -- no new dependency), just used to
+    ask the opposite question."""
+
+    def __init__(self, threshold: float = 0.5, onset_frames: int = 2):
+        self.threshold = threshold
+        self.onset_frames = onset_frames  # consecutive above-threshold frames required, so one noise spike can't trigger a transcription cycle
+        self._vad = None
+        self._consecutive = 0
+
+    def load(self) -> None:
+        if self._vad is not None:
+            return
+        from openwakeword import VAD
+        self._vad = VAD()
+
+    def reset(self) -> None:
+        """Call after acting on a detected onset (or discarding a
+        false-positive utterance) so leftover VAD state doesn't bias the
+        next check."""
+        if self._vad is not None:
+            self._vad.reset_states()
+        self._consecutive = 0
+
+    def check(self, frame: np.ndarray) -> bool:
+        if self._vad is None:
+            raise RuntimeError("SpeechOnsetDetector.load() must be called first.")
+        score = self._vad.predict(frame, frame_size=VAD_FRAME_SIZE)
+        if score >= self.threshold:
+            self._consecutive += 1
+        else:
+            self._consecutive = 0
+        return self._consecutive >= self.onset_frames

@@ -47,6 +47,7 @@ from ui.file_utils import _FILE_ICONS, _file_category, _fmt_size
 from ui.metric_bar import MetricBar
 from ui.setup_overlay import SetupOverlay
 from ui.remote_key_overlay import RemoteKeyOverlay
+from core.assistant_state import get_state
 
 
 class MainWindow(QMainWindow):
@@ -54,6 +55,8 @@ class MainWindow(QMainWindow):
     _state_sig   = pyqtSignal(str)
     _content_sig = pyqtSignal(str, str)   # (title, text) — thread-safe content display
     _status_sig  = pyqtSignal(dict)       # subsystem constellation status — thread-safe
+    _scan_sig    = pyqtSignal(bool, str)  # Defender scan animation/status
+    _power_sig   = pyqtSignal(bool)       # Power Mode theme
     _reconfig_sig = pyqtSignal()          # trigger setup overlay from any thread
     _camera_sig     = pyqtSignal(bytes)   # show camera frame preview (small overlay)
     _cam_stream_sig = pyqtSignal(bool)   # True=start live stream, False=stop
@@ -79,6 +82,7 @@ class MainWindow(QMainWindow):
         self._barge_in         = False  # voice barge-in — off by default (needs headphones to work well)
         self._current_file: str | None = None
         self._remote_overlay: RemoteKeyOverlay | None = None
+        self._last_sound_state = ""
 
         central = QWidget()
         central.setStyleSheet(f"background: {C.BG};")
@@ -178,8 +182,10 @@ class MainWindow(QMainWindow):
         self._state_sig.connect(self._apply_state)
         self._content_sig.connect(self._show_content)
         self._status_sig.connect(self.hud.set_subsystem_status)
+        self._scan_sig.connect(self.hud.set_security_scan)
+        self._power_sig.connect(self.hud.set_power_mode)
         self.hud.node_clicked.connect(self._on_node_clicked)
-        self._reconfig_sig.connect(self._show_setup)
+        self._reconfig_sig.connect(self._on_reconfig_requested)
         self._camera_sig.connect(self._show_camera_frame)
         self._cam_stream_sig.connect(self._on_cam_stream)
         self._cam_frame_sig.connect(self._on_cam_frame)
@@ -621,6 +627,12 @@ class MainWindow(QMainWindow):
         except Exception:
             self._proc_lbl.setText("PROC  --")
 
+        threats = snap.get("threats", 0)
+        self._threats_lbl.setText(f"THREATS  {threats}")
+        self._threats_lbl.setStyleSheet(
+            f"color: {C.RED if threats > 0 else C.GREEN}; background: transparent; border: none;"
+        )
+
 
     def _build_header(self) -> QWidget:
         w = QWidget()
@@ -711,6 +723,11 @@ class MainWindow(QMainWindow):
         self._proc_lbl.setFont(QFont(_fonts.MONO_FONT, 9))
         self._proc_lbl.setStyleSheet(f"color: {C.TEXT_MED}; background: transparent; border: none;")
         ip_lay.addWidget(self._proc_lbl)
+
+        self._threats_lbl = QLabel("THREATS  --")
+        self._threats_lbl.setFont(QFont(_fonts.MONO_FONT, 9))
+        self._threats_lbl.setStyleSheet(f"color: {C.GREEN}; background: transparent; border: none;")
+        ip_lay.addWidget(self._threats_lbl)
 
         os_name = {"Windows": "Windows", "Darwin": "macOS", "Linux": "Linux"}.get(_OS, _OS)
         os_lbl = QLabel(os_name)
@@ -823,6 +840,20 @@ class MainWindow(QMainWindow):
         """)
         remote_btn.clicked.connect(self._open_remote)
         lay.addWidget(remote_btn)
+
+        tasks_btn = QPushButton("Task center")
+        tasks_btn.setFixedHeight(32)
+        tasks_btn.setFont(QFont(_fonts.UI_FONT, 9, QFont.Weight.DemiBold))
+        tasks_btn.setCursor(Qt.CursorShape.PointingHandCursor)
+        tasks_btn.setStyleSheet(f"""
+            QPushButton {{
+                background: {C.PANEL2}; color: {C.TEXT};
+                border: 1px solid {C.BORDER}; border-radius: 8px;
+            }}
+            QPushButton:hover {{ color: {C.PRI}; border: 1px solid {C.PRI_DIM}; }}
+        """)
+        tasks_btn.clicked.connect(self._show_task_center)
+        lay.addWidget(tasks_btn)
 
         fs_btn = QPushButton("Fullscreen  ·  F11")
         fs_btn.setFixedHeight(28)
@@ -994,6 +1025,24 @@ class MainWindow(QMainWindow):
             total = self._center_split.height()
             self._center_split.setSizes([max(total - 220, 120), 220])
 
+    def _show_task_center(self) -> None:
+        state = get_state()
+        open_tasks = [task for task in state["tasks"] if task.get("status") == "open"]
+        lines = [
+            f"Focus mode: {'ACTIVE' if state['focus']['active'] else 'OFF'}",
+            f"Open tasks: {len(open_tasks)} | Saved routines: {len(state['routines'])}",
+            "",
+            "TASKS",
+        ]
+        lines.extend(f"  {task['id']}  {task['title']}" for task in open_tasks[:8])
+        if not open_tasks:
+            lines.append("  No open tasks")
+        lines.extend(["", "RECENT ACTIVITY"])
+        lines.extend(f"  {entry['at']}  {entry['action']}  {entry['status']}" for entry in state["activity"][:8])
+        if not state["activity"]:
+            lines.append("  No activity recorded")
+        self._show_content("Task center", "\n".join(lines))
+
     def _on_node_clicked(self, node_id: str) -> None:
         """Slot for HudCanvas.node_clicked — runs on the Qt main thread
         (triggered by a real mouse event), so this can call _show_content
@@ -1147,6 +1196,7 @@ class MainWindow(QMainWindow):
             threading.Thread(target=self.on_text_command, args=(txt,), daemon=True).start()
 
     def _apply_state(self, state: str):
+        self._last_sound_state = state
         self.hud.state    = state
         self.hud.speaking = (state == "SPEAKING")
 
@@ -1157,6 +1207,27 @@ class MainWindow(QMainWindow):
             return bool(d.get("gemini_api_key")) and bool(d.get("os_system"))
         except Exception:
             return False
+
+    def _on_reconfig_requested(self):
+        # Only reached via _reconfig_sig, i.e. JarvisUI.prompt_reconfig()
+        # (called from main.py's asyncio-loop thread after an invalid-API-
+        # key error mid-session -- see main.py's run()). JarvisUI now keeps
+        # this window hidden by default (wake-word-gated startup), and
+        # nothing else will make it visible again on its own at this
+        # point (the splash-to-main-window handoff already happened long
+        # ago), so this must surface the window itself, or reconfiguring
+        # would stall silently with no visible prompt. This runs on the
+        # Qt thread already (queued signal/slot connection across
+        # threads), so it's safe to touch the window directly here.
+        #
+        # NOT used for the initial fresh-install case (MainWindow.__init__
+        # calls self._show_setup() directly, not through this signal) --
+        # that path is instead surfaced by JarvisUI._finish_splash(),
+        # properly sequenced after the splash animation finishes.
+        self.show()
+        self.raise_()
+        self.activateWindow()
+        self._show_setup()
 
     def _show_setup(self):
         ov = SetupOverlay(self.centralWidget())

@@ -47,6 +47,7 @@ from ctypes import wintypes
 
 import anthropic
 from livekit.agents import RunContext, function_tool
+from PIL import Image
 
 import config
 import usage as usage_tracker
@@ -60,13 +61,18 @@ _SYSTEM_PROMPT = """\
 настройки, работать в любых приложениях, в меню игр и неспешных играх.
 
 КАК РАБОТАТЬ:
-- После каждого действия смотри на скриншот и проверяй, что оно сработало. Не вышло — \
-  попробуй иначе (другой элемент, клавиатура, прокрутка, пауза), но не повторяй одно и то \
-  же больше двух раз.
+- Актуальный скриншот уже приложен к задаче — не запрашивай screenshot, сразу действуй.
+- Если уверен в результате, делай несколько действий за один ход (клик в поле → type → \
+  key Return): скриншот придёт после последнего. После хода проверяй по скриншоту, что \
+  сработало. Не вышло — попробуй иначе (другой элемент, клавиатура, прокрутка), но не \
+  повторяй одно и то же больше двух раз. Экран сам дожидается окончания анимаций — wait \
+  нужен только для долгих загрузок.
 - Клавиатура надёжнее мыши: клавиша Win открывает поиск (введи название приложения, \
   Return), ctrl+l — адресная строка браузера, alt+Tab — переключение окон. Мелкий текст \
   читай через zoom.
-- Русский и любой другой текст вводи инструментом type — он поддерживает Unicode.
+- Текст вводи инструментом type: он вставляет его целиком (любой язык, переносы строк \
+  работают) — не набирай по буквам. Если текст не появился (поле запрещает вставку) — \
+  повтори тот же type ещё раз: второй раз он будет набран по клавишам.
 - Подстановки в тексте type заменяются автоматически и остаются теми же весь запуск: \
   {{random:username}} {{random:password}} {{random:name}} {{random:birthday}} — выдуманные \
   данные для регистраций (birthday в формате ДД.ММ.ГГГГ; если поле требует другой формат — \
@@ -99,13 +105,18 @@ _OPENAI_SYSTEM_PROMPT = """\
 настройки, работать в любых приложениях, в меню игр и неспешных играх.
 
 КАК РАБОТАТЬ:
-- После каждой группы действий проверяй по новому скриншоту, что они сработали. Не \
-  вышло — попробуй иначе (другой элемент, клавиатура, прокрутка, пауза), но не повторяй \
-  одно и то же больше двух раз.
+- Актуальный скриншот уже приложен к задаче — не запрашивай screenshot, сразу действуй.
+- Если уверен в результате, объединяй действия в одну группу (клик в поле → type → \
+  enter). После каждой группы проверяй по новому скриншоту, что сработало. Не вышло — \
+  попробуй иначе (другой элемент, клавиатура, прокрутка), но не повторяй одно и то же \
+  больше двух раз. Экран сам дожидается окончания анимаций — wait нужен только для \
+  долгих загрузок.
 - Клавиатура надёжнее мыши: клавиша win открывает поиск (введи название приложения, \
   enter), ctrl+l — адресная строка браузера, alt+tab — переключение окон. Мелкий текст \
   не увеличить — если не разобрать, попробуй другой масштаб окна или другой подход.
-- Русский и любой другой текст вводи действием type — поддерживается Unicode.
+- Текст вводи действием type: оно вставляет его целиком (любой язык, переносы строк \
+  работают) — не набирай по буквам через keypress. Если текст не появился (поле \
+  запрещает вставку) — повтори тот же type ещё раз: второй раз он будет набран по клавишам.
 - Подстановки в тексте type заменяются автоматически и остаются теми же весь запуск: \
   {{random:username}} {{random:password}} {{random:name}} {{random:birthday}} — выдуманные \
   данные для регистраций (birthday в формате ДД.ММ.ГГГГ; если поле требует другой формат — \
@@ -149,7 +160,41 @@ _KEEP_SCREENSHOTS = 3
 _STUCK_WARN = 2
 _STUCK_ABORT = 4
 _STUCK_WINDOW = 10
+# Coordinates are snapped to this grid (screenshot pixels) before comparing
+# actions: a Notepad run clicked (1126,294), (1120,296), (1128,294) -- the same
+# spot every time -- and the exact-match check never saw it as a repeat.
+_STUCK_GRID = 24
 _NOT_EXECUTED = "Not executed: an earlier computer action in this turn failed."
+_BATCH_OK = "OK (скриншот — после последнего действия этого хода)."
+
+# Screen settling (see _settle): after every action, and in between the
+# actions of one batch (shorter -- nobody looks at those frames).
+_SETTLE_MIN_S = 0.08
+_SETTLE_MAX_S = 1.2
+_SETTLE_BATCH_MAX_S = 0.6
+_PYAUTOGUI_PAUSE = 0.02   # pyautogui sleeps this long after every call (its default is 0.1)
+
+# Final texts that mean "gave up, not done": a fast-tier run ending with one
+# of these is retried once on the full tier (see _use_computer).
+_GAVE_UP = ("Застрял", "Не удалось завершить задачу за")
+
+
+def _snap(v):
+    return round(float(v) / _STUCK_GRID) if isinstance(v, (int, float)) else v
+
+
+def _action_sig(name: str, action_input: dict) -> tuple:
+    """An action with its coordinates snapped to _STUCK_GRID, for the stuck check."""
+    out = {}
+    for k, v in action_input.items():
+        if k in ("coordinate", "start_coordinate") and isinstance(v, (list, tuple)):
+            v = [_snap(c) for c in v]
+        elif k in ("x", "y"):
+            v = _snap(v)
+        elif k == "path" and isinstance(v, list):
+            v = [{pk: _snap(pv) for pk, pv in p.items()} if isinstance(p, dict) else p for p in v]
+        out[k] = v
+    return name, out
 
 _KEY_MAP = {
     "return": "enter", "enter": "enter", "escape": "esc", "esc": "esc",
@@ -177,6 +222,17 @@ def _check_keys(keys: list[str], pyautogui) -> list[str]:
     if not keys or bad:
         raise ValueError(f"неизвестные клавиши: {bad or keys}")
     return keys
+
+
+def _fix_keys() -> None:
+    """Makes Ctrl+<letter> work under a Cyrillic keyboard layout -- see
+    windows_control.keyboard_mouse.fix_key_mapping."""
+    try:
+        from windows_control import keyboard_mouse
+
+        keyboard_mouse.fix_key_mapping()
+    except Exception:
+        pass
 
 
 def _press_key_combo(text: str, pyautogui, repeat: int = 1) -> None:
@@ -218,37 +274,59 @@ class _INPUT(ctypes.Structure):
     _fields_ = [("type", wintypes.DWORD), ("u", _INPUT_UNION)]
 
 
+_VK_FOR_CHAR = {"\n": 0x0D, "\r": 0x0D, "\t": 0x09}   # Enter / Tab: VK_PACKET "\n" is ignored by most edits
+_CHAR_GAP_S = 0.006
+
+
+def _send_events(events: list) -> None:
+    arr = (_INPUT * len(events))(*events)
+    sent = ctypes.windll.user32.SendInput(len(events), arr, ctypes.sizeof(_INPUT))
+    if sent != len(events):
+        raise OSError(f"SendInput отправил {sent} из {len(events)} событий")
+
+
 def _send_unicode(text: str) -> None:
     """Types `text` as Unicode key events (SendInput/KEYEVENTF_UNICODE): works for
-    Cyrillic and any other script, which pyautogui.write() silently drops."""
+    Cyrillic and any other script, which pyautogui.write() silently drops.
+
+    One character (its down+up pair) per SendInput call with a short gap.
+    The old version pushed up to 200 events in a single call, and the new
+    Windows 11 Notepad and Chrome's address bar dropped characters from the
+    burst -- logs/computer_use.log shows the model retyping "Hello World"
+    letter by letter for 30+ steps because of it. "\\r\\n" counts as one Enter."""
+    text = text.replace("\r\n", "\n")
     raw = text.encode("utf-16-le")
     units = struct.unpack(f"<{len(raw) // 2}H", raw)
-    events = []
     for unit in units:
-        for flags in (_KEYEVENTF_UNICODE, _KEYEVENTF_UNICODE | _KEYEVENTF_KEYUP):
-            events.append(_INPUT(type=_INPUT_KEYBOARD, u=_INPUT_UNION(ki=_KEYBDINPUT(0, unit, flags, 0, 0))))
-    for start in range(0, len(events), 200):
-        chunk = events[start:start + 200]
-        arr = (_INPUT * len(chunk))(*chunk)
-        sent = ctypes.windll.user32.SendInput(len(chunk), arr, ctypes.sizeof(_INPUT))
-        if sent != len(chunk):
-            raise OSError(f"SendInput отправил {sent} из {len(chunk)} событий")
-        time.sleep(0.005 * len(chunk) / 2)
+        vk = _VK_FOR_CHAR.get(chr(unit))
+        if vk is not None:
+            pair = [_INPUT(type=_INPUT_KEYBOARD, u=_INPUT_UNION(ki=_KEYBDINPUT(vk, 0, flags, 0, 0)))
+                    for flags in (0, _KEYEVENTF_KEYUP)]
+        else:
+            pair = [_INPUT(type=_INPUT_KEYBOARD, u=_INPUT_UNION(ki=_KEYBDINPUT(0, unit, flags, 0, 0)))
+                    for flags in (_KEYEVENTF_UNICODE, _KEYEVENTF_UNICODE | _KEYEVENTF_KEYUP)]
+        _send_events(pair)
+        time.sleep(_CHAR_GAP_S)
 
 
-def _type_text(text: str) -> None:
-    # Routes ASCII through the same batched KEYEVENTF_UNICODE path as
-    # everything else now (used to split ASCII off to pyautogui.write(),
-    # which sends one SendInput call per key plus a Python-side
-    # time.sleep(interval) between them). Real-world symptom that traced
-    # back to this: typing a URL into Chrome's address bar under its
-    # autocomplete/suggestion processing dropped most letters and left only
-    # punctuation ("://..//..///"), i.e. exactly the characters least likely
-    # to trigger a suggestion-list re-render the app has to keep up with.
-    # _send_unicode batches up to 200 key events per syscall and lets the OS
-    # message queue drain them at its own pace instead of being paced by our
-    # own sleeps, which is both faster and less prone to this class of drop.
-    _send_unicode(text)
+def _type_text(text: str, keystrokes: bool = False) -> str:
+    """Pastes `text` through the clipboard (one Ctrl+V: instant, nothing to
+    drop, multi-line works) unless `keystrokes` is set or it's a single
+    character. Keystrokes are the fallback for fields that block pasting
+    (games, some password fields): the caller asks for them when the model
+    retypes the exact same text, i.e. the paste evidently didn't land.
+    Returns the method used, for the run log."""
+    if keystrokes or len(text) <= 1:
+        _send_unicode(text)
+        return "keys"
+    try:
+        from windows_control import keyboard_mouse
+
+        keyboard_mouse.paste_text(text)
+        return "paste"
+    except Exception:
+        _send_unicode(text)
+        return "keys"
 
 
 # --------------------------------------------------------------------------- placeholders
@@ -307,11 +385,35 @@ def _jpeg_block(img) -> dict:
     }}
 
 
-def _screenshot_block(pyautogui, img_w: int, img_h: int) -> dict:
-    img = pyautogui.screenshot()
-    if img.size != (img_w, img_h):
-        img = img.resize((img_w, img_h))
-    return _jpeg_block(img)
+def _fit(img, img_w: int, img_h: int):
+    # Bilinear with reducing_gap: ~2x faster than the default bicubic on a 4K
+    # frame (measured 28 vs 47 ms) and indistinguishable at this downscale.
+    if img.size == (img_w, img_h):
+        return img
+    return img.resize((img_w, img_h), Image.BILINEAR, reducing_gap=2.0)
+
+
+def _screenshot_block(pyautogui, img_w: int, img_h: int, img=None) -> dict:
+    return _jpeg_block(_fit(img if img is not None else pyautogui.screenshot(), img_w, img_h))
+
+
+def _settle(pyautogui, min_s: float = _SETTLE_MIN_S, max_s: float = _SETTLE_MAX_S):
+    """Waits until the screen stops changing (two consecutive frames match
+    on a coarse 160x90 sample) or `max_s` runs out, and returns the last full
+    frame so the caller's screenshot costs no extra capture. Replaces a fixed
+    0.4 s sleep after every action: a finished click settles in ~0.2 s, while
+    a page that is still loading gets up to `max_s` instead of a whole extra
+    model turn spent on "wait"."""
+    start = time.monotonic()
+    time.sleep(min_s)
+    prev = None
+    while True:
+        img = pyautogui.screenshot()
+        sample = img.resize((160, 90), Image.NEAREST).tobytes()
+        if sample == prev or time.monotonic() - start >= max_s:
+            return img
+        prev = sample
+        time.sleep(0.04)
 
 
 def _zoom_block(pyautogui, region, factor: float) -> dict:
@@ -350,15 +452,32 @@ def _with_modifiers(mods: str, pyautogui, action) -> None:
             pyautogui.keyUp(k)
 
 
+def _type_action(text: str, values: dict[str, str], typed: set[str] | None) -> str:
+    """Shared by both providers: paste the first time, keystrokes when the
+    model sends the exact same text again (the paste evidently didn't land)."""
+    retry = typed is not None and text in typed
+    if typed is not None:
+        typed.add(text)
+    method = _type_text(_resolve_placeholders(text, values), keystrokes=retry)
+    return f"type ({len(text)} симв., {method})"
+
+
 def _execute_action(
     action: str, action_input: dict, factor: float, img_w: int, img_h: int, values: dict[str, str],
+    typed: set[str] | None = None, observe: bool = True,
 ) -> tuple[str, list[dict] | str]:
     """Runs one computer-toolset action physically -- `action` is the
     tool_use block's `name` (each action is its own named tool in this
     toolset, e.g. "left_click"/"type"/"key"/"scroll", not one "computer"
     tool with an action-enum field). Returns (log description, tool_result
-    content). Raises on failure; the caller reports it to the model."""
-    import pyautogui
+    content). Raises on failure; the caller reports it to the model.
+
+    `observe=False` is for all but the last action of a batch: it only waits
+    briefly for the UI and returns a short text instead of a screenshot --
+    the model looks once, after the whole batch."""
+    import screens
+
+    pyautogui = screens.active_pyautogui()
 
     real = pyautogui.size()
     coordinate = _to_real(action_input.get("coordinate"), factor, real)
@@ -421,15 +540,16 @@ def _execute_action(
     elif action == "type":
         if not text:
             raise ValueError("type требует непустой text")
-        _type_text(_resolve_placeholders(text, values))
-        desc = f"type ({len(text)} симв.)"
+        desc = _type_action(text, values, typed)
     elif action == "wait":
         time.sleep(min(float(action_input.get("duration", 1.0)), 30.0))
     else:
         raise ValueError(f"неизвестное действие '{action}'")
 
-    time.sleep(0.4)   # let the UI settle before the model looks again
-    return desc, [_screenshot_block(pyautogui, img_w, img_h)]
+    if not observe:
+        _settle(pyautogui, max_s=_SETTLE_BATCH_MAX_S)
+        return desc, _BATCH_OK
+    return desc, [_screenshot_block(pyautogui, img_w, img_h, _settle(pyautogui))]
 
 
 def _strip_old_screenshots(messages: list[dict], keep: int = _KEEP_SCREENSHOTS) -> None:
@@ -450,6 +570,21 @@ def _strip_old_screenshots(messages: list[dict], keep: int = _KEEP_SCREENSHOTS) 
                       if isinstance(c, dict) and c.get("type") == "image"]
     for content, i in slots[:max(0, len(slots) - keep)]:
         content[i] = placeholder
+
+
+def _mark_cache(messages: list[dict]) -> None:
+    """Moves the one rolling cache breakpoint to the newest message, so each
+    turn reads the whole unchanged prefix (task, older turns) from cache
+    instead of paying full price for it again. The API allows 4 breakpoints
+    per request; tools + system already use 2, so older ones are removed."""
+    for msg in messages:
+        if isinstance(msg.get("content"), list):
+            for block in msg["content"]:
+                if isinstance(block, dict):
+                    block.pop("cache_control", None)
+    last = messages[-1]
+    if isinstance(last.get("content"), list) and last["content"]:
+        last["content"][-1]["cache_control"] = {"type": "ephemeral"}
 
 
 def _add_note(result_block: dict, note: str) -> None:
@@ -474,18 +609,26 @@ def _log_run(task: str, steps: list[str], result: str, values: dict[str, str] | 
         pass
 
 
-def _run_loop(task: str, max_steps: int) -> tuple[str, list[str], dict[str, str], tuple[int, int]]:
+def _run_loop(task: str, max_steps: int, fast: bool = False,
+              values: dict[str, str] | None = None) -> tuple[str, list[str], dict[str, str], tuple[int, int]]:
     """Blocking: runs the full plan/act/observe loop. Executed via
     asyncio.to_thread since both the API calls and every action inside it
     are synchronous. `max_steps` caps physical actions (screenshots and waits
-    included), not API turns."""
-    import pyautogui
+    included), not API turns. `fast` = the cheap tier (lower thinking effort)
+    for short tasks; `values` carries generated placeholders across a retry."""
+    import screens
 
+    pyautogui = screens.active_pyautogui()
+
+    pyautogui.PAUSE = _PYAUTOGUI_PAUSE
+    _fix_keys()
     real_w, real_h = pyautogui.size()
     factor, img_w, img_h = _compute_scale(real_w, real_h)
-    values: dict[str, str] = {}
-    steps: list[str] = ["(начальный скриншот)"]
+    values = {} if values is None else values
+    typed: set[str] = set()
+    steps: list[str] = [f"(начальный скриншот{', быстрый режим' if fast else ''})"]
     tokens_in = tokens_out = 0
+    effort = config.COMPUTER_USE_FAST_EFFORT if fast else config.COMPUTER_USE_EFFORT
 
     client = anthropic.Anthropic(api_key=config.ANTHROPIC_API_KEY, timeout=120.0)
     # computer_toolset_20260801 bundles every action (left_click, type, key,
@@ -520,10 +663,11 @@ def _run_loop(task: str, max_steps: int) -> tuple[str, list[str], dict[str, str]
         if left is not None and left <= 0:
             return done("Остановился: исчерпан дневной лимит расходов на ИИ.")
 
+        _mark_cache(messages)
         response = client.beta.messages.create(
             model=config.COMPUTER_USE_MODEL,
             max_tokens=8000,      # room for adaptive thinking + the action
-            output_config={"effort": config.COMPUTER_USE_EFFORT},
+            output_config={"effort": effort},
             system=system_blocks,
             tools=[tool_def],
             messages=messages,
@@ -547,7 +691,7 @@ def _run_loop(task: str, max_steps: int) -> tuple[str, list[str], dict[str, str]
         _strip_old_screenshots(messages)
         result_blocks: list[dict] = []
         failed = False
-        for tu in tool_uses:
+        for n, tu in enumerate(tool_uses):
             block: dict = {"type": "tool_result", "tool_use_id": tu.id}
             # A member of a toolset (computer_toolset_20260801 bundles left_click/
             # type/key/... as members of "computer") must get its tool_result
@@ -560,7 +704,8 @@ def _run_loop(task: str, max_steps: int) -> tuple[str, list[str], dict[str, str]
                 block.update(content=_NOT_EXECUTED, is_error=True)
             else:
                 try:
-                    desc, content = _execute_action(tu.name, dict(tu.input or {}), factor, img_w, img_h, values)
+                    desc, content = _execute_action(tu.name, dict(tu.input or {}), factor, img_w, img_h, values,
+                                                    typed=typed, observe=n == len(tool_uses) - 1)
                     block["content"] = content
                     steps.append(desc)
                 except pyautogui.FailSafeException:
@@ -571,8 +716,13 @@ def _run_loop(task: str, max_steps: int) -> tuple[str, list[str], dict[str, str]
                     failed = True
             used += 1
             result_blocks.append(block)
+        if failed and not any(isinstance(b.get("content"), list) for b in result_blocks):
+            # Earlier actions of the batch returned text only (observe=False) and
+            # the rest was skipped: give the model the current screen after the
+            # tool_results (they must come first in the message).
+            result_blocks.append(_screenshot_block(pyautogui, img_w, img_h))
 
-        sig = json.dumps([(tu.name, dict(tu.input or {})) for tu in tool_uses
+        sig = json.dumps([_action_sig(tu.name, dict(tu.input or {})) for tu in tool_uses
                           if tu.name not in ("screenshot", "zoom", "wait")], sort_keys=True, default=str)
         # Counts how many times this exact action (same click coordinate,
         # same typed text, ...) shows up anywhere in the last _STUCK_WINDOW
@@ -589,7 +739,7 @@ def _run_loop(task: str, max_steps: int) -> tuple[str, list[str], dict[str, str]
             return done(f"Застрял: одно и то же действие повторилось {repeats} раз за последние ходы "
                         f"без результата -- остановился.")
         if repeats >= _STUCK_WARN:
-            _add_note(result_blocks[-1], f"WARNING: это действие уже повторялось {repeats} раз за последние "
+            _add_note([b for b in result_blocks if b.get("type") == "tool_result"][-1], f"WARNING: это действие уже повторялось {repeats} раз за последние "
                                          f"ходы без прогресса. Сделай что-то другое или сообщи НУЖЕН_ЧЕЛОВЕК.")
         messages.append({"role": "user", "content": result_blocks})
 
@@ -624,15 +774,14 @@ def _translate_openai_key(k: str) -> str:
     return _OPENAI_KEY_MAP.get(k.strip().lower(), k.strip().lower())
 
 
-def _openai_screenshot_data_url(pyautogui, img_w: int, img_h: int) -> str:
-    img = pyautogui.screenshot()
-    if img.size != (img_w, img_h):
-        img = img.resize((img_w, img_h))
+def _openai_screenshot_data_url(pyautogui, img_w: int, img_h: int, img=None) -> str:
+    img = _fit(img if img is not None else pyautogui.screenshot(), img_w, img_h)
     return f"data:image/jpeg;base64,{_b64_jpeg(img)}"
 
 
 def _execute_openai_action(
     action: dict, factor: float, img_w: int, img_h: int, values: dict[str, str],
+    typed: set[str] | None = None, last: bool = True,
 ) -> str:
     """Runs one action from a computer_call's `actions` array. Returns a log
     description. Raises on failure; the caller decides how to recover (the
@@ -640,7 +789,9 @@ def _execute_openai_action(
     screenshot goes back -- so a failure here just stops the rest of that
     batch and the next screenshot shows the model whatever actually
     happened)."""
-    import pyautogui
+    import screens
+
+    pyautogui = screens.active_pyautogui()
 
     real = pyautogui.size()
     kind = action.get("type")
@@ -652,8 +803,9 @@ def _execute_openai_action(
         return "screenshot"  # the caller always screenshots after the batch regardless
     if kind == "wait":
         # The "wait" action carries no duration field in OpenAI's schema
-        # (see their own reference handler); 2s matches that reference.
-        time.sleep(2.0)
+        # (their reference handler sleeps a fixed 2 s). Waiting for the screen
+        # to settle instead returns as soon as the page stops changing.
+        _settle(pyautogui, min_s=0.5, max_s=3.0)
         return "wait"
     if kind == "move":
         pyautogui.moveTo(*coordinate, duration=0.1)
@@ -698,31 +850,42 @@ def _execute_openai_action(
         text = action.get("text") or ""
         if not text:
             raise ValueError("type требует непустой text")
-        _type_text(_resolve_placeholders(text, values))
-        desc = f"type ({len(text)} симв.)"
+        desc = _type_action(text, values, typed)
     else:
         raise ValueError(f"неизвестное действие '{kind}'")
 
-    time.sleep(0.4)   # let the UI settle before the batch's closing screenshot
+    if not last:
+        # Mid-batch: just let the UI catch up before the next action; the
+        # caller settles and screenshots once after the whole batch.
+        _settle(pyautogui, max_s=_SETTLE_BATCH_MAX_S)
     return desc
 
 
-def _run_openai_loop(task: str, max_steps: int) -> tuple[str, list[str], dict[str, str], tuple[int, int]]:
+def _run_openai_loop(task: str, max_steps: int, fast: bool = False,
+                     values: dict[str, str] | None = None) -> tuple[str, list[str], dict[str, str], tuple[int, int]]:
     """Blocking: same contract as _run_loop (executed via asyncio.to_thread),
     but drives GPT-6 Sol/Luna's native "computer" tool on the Responses API
-    instead of Anthropic's computer_toolset."""
-    import pyautogui
+    instead of Anthropic's computer_toolset. `fast` switches to the quick
+    tier (OPENAI_COMPUTER_USE_FAST_MODEL at low reasoning effort)."""
+    import screens
+
+    pyautogui = screens.active_pyautogui()
     from openai import OpenAI
     from openai.types import Reasoning
 
+    pyautogui.PAUSE = _PYAUTOGUI_PAUSE
+    _fix_keys()
     real_w, real_h = pyautogui.size()
     factor, img_w, img_h = _compute_scale(real_w, real_h)
-    values: dict[str, str] = {}
-    steps: list[str] = ["(начальный скриншот)"]
+    values = {} if values is None else values
+    typed: set[str] = set()
+    steps: list[str] = [f"(начальный скриншот{', быстрый режим' if fast else ''})"]
     tokens_in = tokens_out = 0
+    model = config.OPENAI_COMPUTER_USE_FAST_MODEL if fast else config.OPENAI_COMPUTER_USE_MODEL
 
     client = OpenAI(api_key=config.OPENAI_API_KEY, timeout=120.0)
-    reasoning = Reasoning(effort=config.OPENAI_COMPUTER_USE_REASONING_EFFORT)
+    reasoning = Reasoning(effort=config.OPENAI_COMPUTER_USE_FAST_REASONING_EFFORT if fast
+                          else config.OPENAI_COMPUTER_USE_REASONING_EFFORT)
     tools = [{"type": "computer"}]
 
     deadline = time.monotonic() + config.COMPUTER_USE_MAX_SECONDS
@@ -753,7 +916,7 @@ def _run_openai_loop(task: str, max_steps: int) -> tuple[str, list[str], dict[st
             return done("Остановился: исчерпан дневной лимит расходов на ИИ.")
 
         response = client.responses.create(
-            model=config.OPENAI_COMPUTER_USE_MODEL,
+            model=model,
             instructions=_OPENAI_SYSTEM_PROMPT,
             tools=tools,
             reasoning=reasoning,
@@ -763,7 +926,7 @@ def _run_openai_loop(task: str, max_steps: int) -> tuple[str, list[str], dict[st
         previous_response_id = response.id
         usage = getattr(response, "usage", None)
         if usage is not None:
-            usage_tracker.record(config.OPENAI_COMPUTER_USE_MODEL, getattr(usage, "input_tokens", 0) or 0,
+            usage_tracker.record(model, getattr(usage, "input_tokens", 0) or 0,
                                  getattr(usage, "output_tokens", 0) or 0, source="computer_use")
             tokens_in += getattr(usage, "input_tokens", 0) or 0
             tokens_out += getattr(usage, "output_tokens", 0) or 0
@@ -783,9 +946,10 @@ def _run_openai_loop(task: str, max_steps: int) -> tuple[str, list[str], dict[st
             actions = list(call.actions or [])
             action_dicts = [a.model_dump() if hasattr(a, "model_dump") else dict(a) for a in actions]
             failed_note = ""
-            for a in action_dicts:
+            for n, a in enumerate(action_dicts):
                 try:
-                    desc = _execute_openai_action(a, factor, img_w, img_h, values)
+                    desc = _execute_openai_action(a, factor, img_w, img_h, values,
+                                                  typed=typed, last=n == len(action_dicts) - 1)
                     steps.append(desc)
                 except pyautogui.FailSafeException:
                     return done("Прервано: мышь уведена в угол экрана (аварийная остановка).")
@@ -795,7 +959,7 @@ def _run_openai_loop(task: str, max_steps: int) -> tuple[str, list[str], dict[st
                     break
                 used += 1
 
-            screenshot_url = _openai_screenshot_data_url(pyautogui, img_w, img_h)
+            screenshot_url = _openai_screenshot_data_url(pyautogui, img_w, img_h, _settle(pyautogui))
             next_input.append({
                 "type": "computer_call_output",
                 "call_id": call.call_id,
@@ -804,8 +968,8 @@ def _run_openai_loop(task: str, max_steps: int) -> tuple[str, list[str], dict[st
             if failed_note:
                 next_input.append({"role": "user", "content": [{"type": "input_text", "text": failed_note}]})
 
-            sig = json.dumps([a for a in action_dicts if a.get("type") not in ("screenshot", "wait")],
-                             sort_keys=True, default=str)
+            sig = json.dumps([_action_sig(a.get("type", ""), a) for a in action_dicts
+                              if a.get("type") not in ("screenshot", "wait")], sort_keys=True, default=str)
             if sig != "[]":
                 repeats = sum(1 for s in sig_history if s == sig) + 1
                 sig_history.append(sig)
@@ -820,15 +984,135 @@ def _run_openai_loop(task: str, max_steps: int) -> tuple[str, list[str], dict[st
                             f"без прогресса. Сделай что-то другое или сообщи НУЖЕН_ЧЕЛОВЕК."}]})
 
 
+# --------------------------------------------------------------------------- Claude Code (subscription) path
+#
+# config.SUBSCRIPTION_MODE: a `claude -p` sub-agent (cc_agent.py) looks and
+# acts through one MCP tool, "computer", whose actions are exactly the
+# computer-toolset actions _execute_action already performs. Every action
+# returns a fresh screenshot, so each tool result is the screen after it.
+
+# Kept well under the size the API would silently downscale, so the model's
+# coordinates stay in the same pixel space as the screenshot we sent.
+_CC_MAX_IMAGE_DIM = 1280
+
+_CC_NOTE = """
+КАК УСТРОЕНА РАБОТА В ЭТОМ РЕЖИМЕ:
+- Всё делается инструментом computer: одно действие за вызов, в ответ — новый скриншот.
+- Координаты — в пикселях скриншота ({w}x{h}), левый верхний угол 0,0.
+- action: left_click / right_click / middle_click / double_click / triple_click (coordinate; \
+text — зажатые модификаторы, например "shift"), mouse_move (coordinate), left_click_drag \
+(start_coordinate, coordinate), scroll (coordinate, scroll_direction up/down/left/right, \
+scroll_amount), key (text — клавиша или сочетание: "Return", "ctrl+s"; repeat), hold_key \
+(text, duration), type (text), wait (duration), screenshot, zoom (region [x0, y0, x1, y1]), \
+cursor_position.
+- Когда задача выполнена — ответь обычным текстом без вызова инструмента.
+"""
+
+_CC_COMPUTER_SCHEMA = {
+    "type": "object",
+    "properties": {
+        "action": {"type": "string", "enum": [
+            "left_click", "right_click", "middle_click", "double_click", "triple_click", "mouse_move",
+            "left_click_drag", "left_mouse_down", "left_mouse_up", "scroll", "key", "hold_key", "type",
+            "wait", "screenshot", "zoom", "cursor_position"]},
+        "coordinate": {"type": "array", "items": {"type": "number"}, "minItems": 2, "maxItems": 2},
+        "start_coordinate": {"type": "array", "items": {"type": "number"}, "minItems": 2, "maxItems": 2},
+        "text": {"type": "string"},
+        "scroll_direction": {"type": "string", "enum": ["up", "down", "left", "right"]},
+        "scroll_amount": {"type": "integer"},
+        "duration": {"type": "number"},
+        "repeat": {"type": "integer"},
+        "region": {"type": "array", "items": {"type": "number"}, "minItems": 4, "maxItems": 4},
+    },
+    "required": ["action"],
+}
+
+
+async def _run_cc_loop_async(task: str, max_steps: int, fast: bool = False,
+                             values: dict[str, str] | None = None
+                             ) -> tuple[str, list[str], dict[str, str], tuple[int, int]]:
+    import cc_agent
+    import screens
+
+    pyautogui = screens.active_pyautogui()
+
+    pyautogui.PAUSE = _PYAUTOGUI_PAUSE
+    _fix_keys()
+    real_w, real_h = pyautogui.size()
+    factor = min(1.0, _CC_MAX_IMAGE_DIM / max(real_w, real_h))
+    img_w, img_h = round(real_w * factor), round(real_h * factor)
+    values = {} if values is None else values
+    typed: set[str] = set()
+    steps: list[str] = [f"(начальный скриншот, Claude Code{', быстрый режим' if fast else ''})"]
+    sig_history: deque[str] = deque(maxlen=_STUCK_WINDOW)
+    deadline = time.monotonic() + config.COMPUTER_USE_MAX_SECONDS
+    used = 0
+
+    async def computer(args: dict) -> list[dict] | str:
+        nonlocal used
+        if _STOP.is_set():
+            raise cc_agent.Finish("Остановлено по просьбе пользователя.")
+        if time.monotonic() > deadline:
+            raise cc_agent.Finish(f"Не уложился во время ({config.COMPUTER_USE_MAX_SECONDS} с) -- остановился.")
+        if used >= max_steps:
+            raise cc_agent.Finish(f"Не удалось завершить задачу за {max_steps} действий -- остановился.")
+        action = str(args.get("action", ""))
+        action_input = {k: v for k, v in args.items() if k != "action"}
+        used += 1
+        try:
+            desc, content = _execute_action(action, action_input, factor, img_w, img_h, values, typed=typed)
+        except pyautogui.FailSafeException:
+            raise cc_agent.Finish("Прервано: мышь уведена в угол экрана (аварийная остановка).") from None
+        except Exception as exc:
+            steps.append(f"{action} failed: {exc}")
+            raise cc_agent.ToolFailed(f"Ошибка выполнения действия: {exc}") from exc
+        steps.append(desc)
+        content = [{"type": "text", "text": content}] if isinstance(content, str) else list(content)
+        if action not in ("screenshot", "zoom", "wait", "cursor_position"):
+            sig = json.dumps(_action_sig(action, action_input), sort_keys=True, default=str)
+            repeats = sum(1 for s in sig_history if s == sig) + 1
+            sig_history.append(sig)
+            if repeats >= _STUCK_ABORT:
+                raise cc_agent.Finish(f"Застрял: одно и то же действие повторилось {repeats} раз за последние "
+                                      f"ходы без результата -- остановился.")
+            if repeats >= _STUCK_WARN:
+                content.append({"type": "text", "text": f"WARNING: это действие уже повторялось {repeats} раз "
+                                "без прогресса. Сделай что-то другое или сообщи НУЖЕН_ЧЕЛОВЕК."})
+        return content
+
+    tool = cc_agent.MCPTool("computer", "Мышь, клавиатура и скриншоты этого компьютера. Одно действие за вызов.",
+                            _CC_COMPUTER_SCHEMA, computer)
+    first = _screenshot_block(pyautogui, img_w, img_h)
+    try:
+        text = await cc_agent.run(
+            prompt=task, images=[first], tools=[tool],
+            system=_SYSTEM_PROMPT + _CC_NOTE.format(w=img_w, h=img_h),
+            model=config.CLAUDE_CODE_FAST_MODEL if fast else config.CLAUDE_CODE_AGENT_MODEL,
+            max_turns=max_steps + 5, should_stop=_STOP.is_set,
+            timeout=config.COMPUTER_USE_MAX_SECONDS + 60,
+        )
+    except cc_agent.RunFailed as exc:
+        text = f"Не удалось выполнить задачу на экране: {exc}"
+    return text or "Готово.", steps, values, (0, 0)
+
+
+def _run_cc_loop(task: str, max_steps: int, fast: bool = False,
+                 values: dict[str, str] | None = None) -> tuple[str, list[str], dict[str, str], tuple[int, int]]:
+    """Same contract as _run_loop (blocking, run via asyncio.to_thread): the
+    sub-agent and its MCP server get this worker thread's own event loop."""
+    return asyncio.run(_run_cc_loop_async(task, max_steps, fast, values))
+
+
 @register_impl("use_computer")
 @log_call("use_computer")
-async def _use_computer(*, task: str, max_steps: int | None = None) -> dict:
+async def _use_computer(*, task: str, max_steps: int | None = None, simple: bool = False,
+                        monitor: int = 1) -> dict:
     if config.SYSTEM != "Windows":
         return {"status": "error", "message": "Управление экраном поддерживается только на Windows."}
-    use_openai = config.COMPUTER_USE_PROVIDER == "openai"
+    use_openai = config.COMPUTER_USE_PROVIDER == "openai" and not config.SUBSCRIPTION_MODE
     if use_openai and not config.OPENAI_API_KEY:
         return {"status": "error", "message": "Не задан OPENAI_API_KEY."}
-    if not use_openai and not config.ANTHROPIC_API_KEY:
+    if not use_openai and not config.SUBSCRIPTION_MODE and not config.ANTHROPIC_API_KEY:
         return {"status": "error", "message": "Не задан ANTHROPIC_API_KEY."}
     refusal = usage_tracker.check_budget("работу с экраном")
     if refusal:
@@ -836,11 +1120,36 @@ async def _use_computer(*, task: str, max_steps: int | None = None) -> dict:
     if not _RUN_LOCK.acquire(blocking=False):
         return {"status": "error", "message": "Я уже выполняю другую задачу на экране. Скажи «стоп», чтобы прервать её."}
 
-    steps_cap = max_steps or config.COMPUTER_USE_MAX_STEPS
+    import screens
+
+    try:
+        screens.get(int(monitor or 1))
+    except ValueError as exc:
+        _RUN_LOCK.release()
+        return {"status": "error", "message": str(exc)}
+    screens.set_active(int(monitor or 1))
+    fast = simple and config.COMPUTER_USE_FAST_ENABLED
+    steps_cap = max_steps or (config.COMPUTER_USE_FAST_MAX_STEPS if fast else config.COMPUTER_USE_MAX_STEPS)
     try:
         _STOP.clear()
-        loop_fn = _run_openai_loop if use_openai else _run_loop
-        final_text, steps, values, tokens = await asyncio.to_thread(loop_fn, task, steps_cap)
+        loop_fn = _run_cc_loop if config.SUBSCRIPTION_MODE else _run_openai_loop if use_openai else _run_loop
+        try:
+            final_text, steps, values, tokens = await asyncio.to_thread(loop_fn, task, steps_cap, fast)
+        except Exception as exc:
+            if not fast:
+                raise
+            # e.g. the fast model rejects the computer tool: don't fail the
+            # user's request over the cheap tier, run the full one instead.
+            _log_run(task, [], f"[быстрый режим: ошибка] {exc} -> повтор полной моделью")
+            fast = False
+            final_text, steps, values, tokens = await asyncio.to_thread(
+                loop_fn, task, max_steps or config.COMPUTER_USE_MAX_STEPS, False)
+        if fast and final_text.startswith(_GAVE_UP) and not _STOP.is_set():
+            # The quick tier went in circles: one retry on the full tier,
+            # continuing from whatever is on screen now.
+            _log_run(task, steps, final_text + " -> повтор полной моделью", values, tokens)
+            final_text, steps, values, tokens = await asyncio.to_thread(
+                loop_fn, task, max_steps or config.COMPUTER_USE_MAX_STEPS, False, values)
         _log_run(task, steps, final_text, values, tokens)
         if values:
             final_text += (" Сгенерированные данные (логин/пароль и т.п.) сохранены в "
@@ -850,6 +1159,7 @@ async def _use_computer(*, task: str, max_steps: int | None = None) -> dict:
         _log_run(task, [], f"[ошибка] {exc}")
         return {"status": "error", "message": f"Не удалось выполнить задачу на экране: {exc}"}
     finally:
+        screens.set_active(1)
         _RUN_LOCK.release()
 
 
@@ -857,16 +1167,21 @@ async def _use_computer(*, task: str, max_steps: int | None = None) -> dict:
 @log_call("stop_computer_use")
 async def _stop_computer_use() -> dict:
     _STOP.set()
+    from tools import browser
+
+    browser.stop()  # "стоп" means stop whichever hands are busy
     return {"status": "ok", "message": "Останавливаю управление экраном."}
 
 
 @register_tool
 @function_tool
-async def use_computer(context: RunContext, task: str, max_steps: int | None = None) -> str:
+async def use_computer(context: RunContext, task: str, max_steps: int | None = None, simple: bool = False,
+                       monitor: int = 1) -> str:
     """Take over the mouse/keyboard and finish a multi-step task on this PC by
     looking at the real screen and clicking/typing step by step. Use it for
-    multi-step work inside windows: registering an account on a website,
-    filling in forms, changing an app's or Windows' settings, working in a
+    multi-step work inside desktop programs (NOT websites -- anything on the
+    web goes to browser_task, which is far faster): changing an app's or
+    Windows' settings, working in a
     program, editing in Adobe Premiere Pro / After Effects / Illustrator,
     menus and slow-paced games. Slower and more expensive than a typed tool:
     prefer window_manager (open/close/focus/list a window) or
@@ -891,8 +1206,16 @@ async def use_computer(context: RunContext, task: str, max_steps: int | None = N
             invent those.
         max_steps: Optional cap on physical actions before giving up
             (default: config.COMPUTER_USE_MAX_STEPS).
+        simple: true for a short task in an already open window, about 1-5
+            actions (type a text, press a button, open a menu item). Runs a
+            faster, cheaper model; if it gets stuck, the full model takes
+            over by itself. Leave false for registrations, multi-window work,
+            Adobe editing, anything long.
+        monitor: Which screen to look at and work on: 1 = main monitor
+            (default), 2 = the second one ("на втором мониторе", "на другом
+            экране"). The whole run happens on that monitor.
     """
-    result = await _use_computer(task=task, max_steps=max_steps)
+    result = await _use_computer(task=task, max_steps=max_steps, simple=simple, monitor=monitor)
     return result["message"]
 
 

@@ -109,6 +109,8 @@ Return ONLY the consolidated memory as valid JSON, same schema -- no markdown, n
         # (see tools/claude_cli.py). Falls back to the direct API call below
         # if the CLI is missing or fails for any reason.
         text = await claude_cli.ask(prompt)
+        if text is None and config.SUBSCRIPTION_MODE:
+            return None
         if text is None:
             client = anthropic.AsyncAnthropic(api_key=config.ANTHROPIC_API_KEY)
             msg = await client.messages.create(

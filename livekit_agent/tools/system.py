@@ -176,15 +176,16 @@ async def find_and_open_file(context: RunContext, query: str) -> str:
 
 @register_impl("take_screenshot")
 @log_call("take_screenshot")
-async def _take_screenshot() -> dict:
+async def _take_screenshot(*, monitor: int = 0) -> dict:
     try:
-        from PIL import ImageGrab
+        import screens
     except ImportError:
         return {"status": "error", "message": "Модуль для скриншотов (Pillow) не установлен."}
 
     def _grab() -> str:
-        img = ImageGrab.grab()
-        fname = time.strftime("screenshot_%Y%m%d_%H%M%S.png")
+        img = screens.grab(int(monitor or 0))
+        which = f"_m{monitor}" if monitor else ""
+        fname = time.strftime(f"screenshot_%Y%m%d_%H%M%S{which}.png")
         path = config.SCREENSHOTS_DIR / fname
         img.save(path)
         return str(path)
@@ -198,9 +199,14 @@ async def _take_screenshot() -> dict:
 
 @register_tool
 @function_tool
-async def take_screenshot(context: RunContext) -> str:
-    """Capture the current screen and save it locally (never uploaded anywhere)."""
-    result = await _take_screenshot()
+async def take_screenshot(context: RunContext, monitor: int = 0) -> str:
+    """Capture the screen and save it locally (never uploaded anywhere).
+    To SEE what is on a screen use look_at_screen instead.
+
+    Args:
+        monitor: 0 = all monitors in one image (default), 1 = main, 2 = second monitor.
+    """
+    result = await _take_screenshot(monitor=monitor)
     return result["message"]
 
 
@@ -208,7 +214,7 @@ async def take_screenshot(context: RunContext) -> str:
 # system_control
 # ---------------------------------------------------------------------------
 
-SystemAction = Literal["volume", "brightness", "wifi", "bluetooth", "lock", "sleep"]
+SystemAction = Literal["volume", "brightness", "wifi", "bluetooth", "lock", "mute", "sleep", "shutdown", "restart"]
 
 
 def _set_volume(value: int) -> str:
@@ -292,6 +298,34 @@ def _lock_workstation() -> str:
     return "Экран заблокирован."
 
 
+def _toggle_mute() -> str:
+    try:
+        from ctypes import POINTER, cast
+
+        from comtypes import CLSCTX_ALL
+        from pycaw.pycaw import AudioUtilities, IAudioEndpointVolume
+    except ImportError:
+        return "Управление звуком недоступно: не установлен pycaw."
+
+    interface = AudioUtilities.GetSpeakers().Activate(IAudioEndpointVolume._iid_, CLSCTX_ALL, None)
+    volume = cast(interface, POINTER(IAudioEndpointVolume))
+    muted = not bool(volume.GetMute())
+    volume.SetMute(int(muted), None)
+    return "Звук выключен." if muted else "Звук включён."
+
+
+def _power_off(restart: bool) -> str:
+    # 15 s grace so the spoken reply finishes; "shutdown /a" cancels it.
+    if SYSTEM == "Windows":
+        subprocess.run(["shutdown", "/r" if restart else "/s", "/t", "15"], check=True)
+    elif SYSTEM == "Darwin":
+        subprocess.run(["osascript", "-e", f'tell app "System Events" to {"restart" if restart else "shut down"}'])
+    else:
+        subprocess.run(["systemctl", "reboot" if restart else "poweroff"])
+    what = "Перезагружаю" if restart else "Выключаю"
+    return f"{what} компьютер через 15 секунд. Отменить — «shutdown /a» в терминале."
+
+
 def _sleep_system() -> str:
     if SYSTEM == "Windows":
         subprocess.run(["rundll32.exe", "powrprof.dll,SetSuspendState", "0,1,0"])
@@ -313,7 +347,7 @@ async def _system_control(*, action: str, value: object = None, confirm: bool = 
         return {
             "status": "needs_confirmation",
             "message": (
-                f"Действие «{action}» необратимо прерывает сеанс. "
+                f"Действие «{action}» прерывает сеанс (несохранённая работа может пропасть). "
                 "Скажите «да, подтверждаю», чтобы выполнить."
             ),
         }
@@ -329,8 +363,12 @@ async def _system_control(*, action: str, value: object = None, confirm: bool = 
             return _set_bluetooth(str(value))
         if action == "lock":
             return _lock_workstation()
+        if action == "mute":
+            return _toggle_mute()
         if action == "sleep":
             return _sleep_system()
+        if action in ("shutdown", "restart"):
+            return _power_off(restart=action == "restart")
         return "Неизвестное действие."
 
     try:
@@ -348,17 +386,19 @@ async def system_control(
     value: str | None = None,
     confirm: bool = False,
 ) -> str:
-    """Change a whitelisted system setting: volume, brightness, wifi, bluetooth, lock, sleep.
+    """Change a whitelisted system setting: volume, brightness, wifi, bluetooth,
+    lock, mute (toggle sound), sleep, shutdown, restart.
 
-    "sleep" suspends the machine and requires the user to have just said
+    "sleep", "shutdown" and "restart" require the user to have just said
     "да, подтверждаю" -- call once with confirm=False to get the confirmation
     prompt, then again with confirm=True only after they confirm out loud.
 
     Args:
-        action: One of "volume", "brightness", "wifi", "bluetooth", "lock", "sleep".
+        action: One of "volume", "brightness", "wifi", "bluetooth", "lock", "mute",
+            "sleep", "shutdown", "restart".
         value: For "volume"/"brightness" an integer 0-100 as a string. For
-            "wifi"/"bluetooth" either "on" or "off". Unused for "lock"/"sleep".
-        confirm: Must be True to actually put the machine to sleep.
+            "wifi"/"bluetooth" either "on" or "off". Unused otherwise.
+        confirm: Must be True to actually sleep / shut down / restart.
     """
     result = await _system_control(action=action, value=value, confirm=confirm)
     return result["message"]
@@ -372,7 +412,11 @@ async def _get_system_status() -> dict:
         mem = psutil.virtual_memory()
         disk_path = "C:\\" if SYSTEM == "Windows" else "/"
         disk = psutil.disk_usage(disk_path)
+        battery = psutil.sensors_battery()
         return {
+            "battery_percent": round(battery.percent) if battery else None,
+            "battery_plugged": bool(battery.power_plugged) if battery else None,
+            "uptime_h": round((time.time() - psutil.boot_time()) / 3600, 1),
             "cpu_percent": cpu,
             "ram_percent": mem.percent,
             "ram_used_gb": round(mem.used / 2**30, 1),
@@ -388,14 +432,18 @@ async def _get_system_status() -> dict:
         f"память {stats['ram_percent']:.0f}% "
         f"({stats['ram_used_gb']} из {stats['ram_total_gb']} ГБ), "
         f"диск занят на {stats['disk_percent']:.0f}%, "
-        f"свободно {stats['disk_free_gb']} ГБ."
+        f"свободно {stats['disk_free_gb']} ГБ, "
+        f"компьютер работает {stats['uptime_h']} ч."
     )
+    if stats["battery_percent"] is not None:
+        charging = "заряжается" if stats["battery_plugged"] else "от батареи"
+        message += f" Батарея {stats['battery_percent']}% ({charging})."
     return {"status": "ok", "message": message, **stats}
 
 
 @register_tool
 @function_tool
 async def get_system_status(context: RunContext) -> str:
-    """Report current CPU, RAM, and disk usage."""
+    """Report current CPU, RAM, disk usage, uptime and battery."""
     result = await _get_system_status()
     return result["message"]

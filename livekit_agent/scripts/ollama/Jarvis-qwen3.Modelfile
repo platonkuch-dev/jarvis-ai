@@ -1,0 +1,9 @@
+# Qwen3-8B with a context window big enough for Jarvis's system prompt plus
+# ~40 tool schemas (~12k tokens). Ollama's default 4k would silently cut them.
+# On a 12 GB card: ~5 GB weights + ~2.4 GB KV cache at 16k.
+FROM qwen3:8b
+PARAMETER num_ctx 16384
+# Qwen's recommended sampling for non-thinking mode.
+PARAMETER temperature 0.7
+PARAMETER top_p 0.8
+PARAMETER top_k 20

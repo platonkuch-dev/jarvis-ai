@@ -22,18 +22,20 @@ CONFIRM = "confirm"
 BLOCK = "block"
 
 _SAFE_TOOLS = {
-    "calculate", "get_weather", "web_search", "get_system_status", "take_screenshot",
+    "calculate", "get_weather", "web_search", "read_webpage","get_system_status", "take_screenshot",
     "find_suspicious_processes", "read_last_log", "read_clipboard", "search_notes", "write_note",
     "draft_email", "list_memory", "remember_fact", "get_schedule", "create_event", "add_todo",
     "complete_todo", "create_reminder", "set_timer", "list_scenarios", "open_application",
     "media_control", "find_and_open_file", "change_voice", "look_at_camera",
     "watch_screen", "stop_watching_screen", "stop_computer_use", "list_tasks", "task_status",
-    "list_triggers",
+    "list_triggers", "get_news", "morning_briefing", "exchange_rate", "play_music", "check_email",
+    "list_reminders", "cancel_reminder", "write_clipboard",
+    "show_day_plan", "close_day_plan", "close_hud_panel", "open_hud_panel", "set_microphone", "look_at_screen", "list_monitors",
 }
 _CONFIRM_TOOLS = {
     "send_telegram_message", "remember_person_fact", "close_application", "use_computer",
     "coding_agent", "run_predefined_script", "run_scenario", "forget_fact",
-    "after_effects_control", "photoshop_control", "premiere_control",
+    "after_effects_control", "photoshop_control", "premiere_control", "send_email",
 }
 _BLOCK_TOOLS = {
     "start_task", "cancel_task", "create_trigger", "delete_trigger", "toggle_trigger",
@@ -43,7 +45,9 @@ _BLOCK_TOOLS = {
 # Per-action refinements for multi-action tools.
 _ACTION_LEVELS: dict[str, dict[str, str]] = {
     "system_control": {"volume": SAFE, "brightness": SAFE, "lock": CONFIRM,
-                       "wifi": CONFIRM, "bluetooth": CONFIRM, "sleep": BLOCK},
+                       "wifi": CONFIRM, "bluetooth": CONFIRM, "mute": SAFE, "sleep": BLOCK,
+                       "shutdown": BLOCK, "restart": BLOCK},
+    "smart_home": {"list": SAFE, "state": SAFE},
     "window_manager": {"list_windows": SAFE, "list_processes": SAFE, "get_active": SAFE,
                        "focus": SAFE, "minimize": SAFE, "maximize": SAFE, "restore": SAFE,
                        "move": SAFE, "resize": SAFE, "wait_for_window": SAFE,
@@ -60,6 +64,11 @@ def classify(tool: str, args: dict | None = None) -> str:
     args = args or {}
     if tool in _BLOCK_TOOLS:
         return BLOCK
+    if tool == "run_powershell":
+        import pc_guard
+
+        verdict, _reason = pc_guard.classify("PowerShell", {"command": str(args.get("command", ""))})
+        return {pc_guard.ALLOW: SAFE, pc_guard.CONFIRM: CONFIRM}.get(verdict, BLOCK)
     if tool in _ACTION_LEVELS:
         return _ACTION_LEVELS[tool].get(str(args.get("action", "")), CONFIRM)
     if tool in _SAFE_TOOLS:

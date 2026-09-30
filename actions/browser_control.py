@@ -542,7 +542,9 @@ class _BrowserSession:
             print(f"[Browser] {label} is already running — real profile is locked, skipping straight to JARVIS profile")
         else:
             try:
-                self._context = await engine_obj.launch_persistent_context(profile, **kwargs)
+                self._context = await asyncio.wait_for(
+                    engine_obj.launch_persistent_context(profile, **kwargs), timeout=8.0
+                )
                 await asyncio.sleep(0.5)
                 self._page = await self._context.new_page()
                 print(f"[Browser] ✅ Launched [{label}] profile={profile}")

@@ -1,17 +1,24 @@
 """Coding agent: opens an existing project in VS Code and, optionally, kicks
-off a real Claude Code session for it in a new, visible terminal window.
+off a real Claude Code session for it.
 
-Deliberately does NOT pass --allow-dangerously-skip-permissions or any other
-permission-bypassing flag to `claude` -- the whole point of a visible,
-interactive terminal is that Claude Code's own tool-approval prompts still
-work exactly as if the user had typed `claude` themselves. Jarvis starts the
-session; it never gets to skip its guardrails, matching this project's own
-"never bypass safety checks" rule for every other tool here.
+Two ways to run that session:
+  - config.CODING_AGENT_BACKGROUND (the default, chosen by the owner):
+    headless `claude -p` in the project folder, no window, with permissions
+    granted up front (bypassPermissions) so it never stops to ask. The
+    destructive commands in config.CLAUDE_CODE_DISALLOWED_TOOLS stay blocked
+    (deny rules still apply in that mode -- verified). Jarvis says the result
+    out loud when it is done.
+  - CODING_AGENT_BACKGROUND=0: a new, visible, interactive terminal with
+    Claude Code's own approval prompts, exactly as if the user had typed
+    `claude` themselves.
 """
 
 from __future__ import annotations
 
 import asyncio
+import json
+import logging
+import os
 import shutil
 import subprocess
 from pathlib import Path
@@ -22,6 +29,11 @@ from livekit.agents import RunContext, function_tool
 import config
 from tools._logging import log_call
 from tools.registry import register_impl, register_tool
+
+logger = logging.getLogger("jarvis-voice-agent.coding_agent")
+
+# Strong refs: asyncio keeps only weak ones to running tasks.
+_BACKGROUND: set[asyncio.Task] = set()
 
 
 # How the user/LLM refers to "Джарвис's own code" -- config.BASE_DIR (this
@@ -108,6 +120,44 @@ def _launch_claude_terminal(path: Path, task: str) -> bool:
         return False
 
 
+async def _run_claude_background(path: Path, task: str) -> None:
+    """Headless Claude Code run in `path`; speaks/notifies the outcome."""
+    import notify
+    from tools import runtime
+
+    env = os.environ.copy()
+    env.pop("ANTHROPIC_API_KEY", None)  # the subscription, not the API key
+    env.pop("ANTHROPIC_AUTH_TOKEN", None)
+    args = [shutil.which("claude"), "-p", task, "--model", config.CODING_AGENT_MODEL,
+            "--permission-mode", "bypassPermissions", "--output-format", "json"]
+    if config.CLAUDE_CODE_DISALLOWED_TOOLS:
+        args += ["--disallowedTools", *config.CLAUDE_CODE_DISALLOWED_TOOLS]
+    proc = None
+    try:
+        proc = await asyncio.create_subprocess_exec(
+            *args, cwd=str(path), env=env,
+            stdin=asyncio.subprocess.DEVNULL, stdout=asyncio.subprocess.PIPE, stderr=asyncio.subprocess.PIPE,
+            creationflags=config.NO_WINDOW,
+        )
+        stdout, stderr = await asyncio.wait_for(proc.communicate(), timeout=config.CODING_AGENT_TIMEOUT_S)
+        try:
+            result = json.loads(stdout).get("result") or ""
+        except ValueError:
+            result = stderr.decode(errors="replace")[-300:]
+        spoken = f"Клод Код закончил работу над «{path.name}». {result.strip()[:600]}"
+    except asyncio.TimeoutError:
+        if proc is not None:
+            proc.kill()
+        spoken = f"Клод Код слишком долго работал над «{path.name}», я его остановил."
+    except Exception as exc:
+        logger.warning("background claude failed", exc_info=True)
+        spoken = f"Не получилось запустить Клод Код для «{path.name}»: {exc}"
+    logger.info("coding agent done: %s", spoken[:300])
+    if not runtime.user_present():
+        notify.notify_owner(f"💻 {spoken}", kind="task")
+    await runtime.say(spoken)
+
+
 def _run(action: str, project: str, task: str) -> dict:
     path = _resolve_project_path(project)
     if path is None:
@@ -117,12 +167,18 @@ def _run(action: str, project: str, task: str) -> dict:
         }
 
     opened_vscode = _open_in_vscode(path)
-    if not opened_vscode:
-        return {"status": "error", "message": "Не нашёл VS Code (команда 'code' не в PATH)."}
-
     if action == "open":
+        if not opened_vscode:
+            return {"status": "error", "message": "Не нашёл VS Code (команда 'code' не в PATH)."}
         return {"status": "ok", "message": f"Открываю проект «{path.name}» в VS Code."}
 
+    if config.CODING_AGENT_BACKGROUND:
+        if not shutil.which("claude"):
+            return {"status": "error", "message": "Не нашёл Claude Code (команда 'claude' не в PATH)."}
+        return {"status": "background", "path": path}
+
+    if not opened_vscode:
+        return {"status": "error", "message": "Не нашёл VS Code (команда 'code' не в PATH)."}
     launched = _launch_claude_terminal(path, task)
     if not launched:
         return {
@@ -148,24 +204,30 @@ async def _coding_agent(*, action: str, project: str, task: str = "") -> dict:
         return {"status": "error", "message": "Не указано название или путь проекта."}
     if action == "start" and not task:
         return {"status": "error", "message": "Для запуска Claude Code нужна задача (что делать в проекте)."}
-    return await asyncio.to_thread(_run, action, project, task)
+    result = await asyncio.to_thread(_run, action, project, task)
+    if result.get("status") == "background":
+        path = result["path"]
+        job = asyncio.create_task(_run_claude_background(path, task), name="coding-agent")
+        _BACKGROUND.add(job)
+        job.add_done_callback(_BACKGROUND.discard)
+        return {"status": "ok", "message": f"Запустил Клод Код в фоне для «{path.name}» с задачей: {task}. "
+                                           "Без окон и вопросов — скажу, когда закончит."}
+    return result
 
 
 @register_tool
 @function_tool
 async def coding_agent(context: RunContext, action: CodingAgentAction, project: str, task: str = "") -> str:
     """Open an existing coding project in VS Code, and optionally start a
-    real Claude Code session for it in a new terminal window so it can
-    actually write/edit code -- the same Claude Code you (Джарвис's LLM
-    brain) are built on, running as its own separate, supervised session
-    with its own normal permission prompts (never bypassed).
+    separate Claude Code session in it so it can actually write/edit code.
+    Only for programming work in a code project -- documents, spreadsheets
+    and presentations you make yourself, not through this tool. By default
+    that session runs in the background with no window and reports back by
+    voice when it is done.
 
     Args:
-        action: "open" just opens the project in VS Code. "start" also opens
-            a new terminal in that project and launches `claude` there
-            (pinned to config.CODING_AGENT_MODEL, Sonnet 5) with `task` as
-            the opening prompt -- the user sees and can guide/approve
-            everything Claude Code does, exactly like using it themselves.
+        action: "open" just opens the project in VS Code. "start" also runs
+            Claude Code in that project with `task` as its job.
         project: The project's folder name (searched under the user's
             projects directory and Desktop), a full path, or "себя" to mean
             Джарвис's own source code (this very project) when the user wants

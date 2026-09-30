@@ -52,7 +52,8 @@ _RISKY = re.compile(
 # app sends it straight to use_computer from then on.
 _WINDOW, _MAX_FAILS = 10, 4
 
-QuickAction = Literal["click", "double_click", "right_click", "type", "read", "select"]
+QuickAction = Literal["click", "double_click", "right_click", "type", "read", "select", "hotkey"]
+_ACTIONS = ("click", "double_click", "right_click", "type", "read", "select", "hotkey")
 
 
 def _app_key(app: str) -> str:
@@ -110,6 +111,29 @@ def _screen_task(app: str, action: str, target: str, text: str) -> str:
     }[action]
 
 
+async def _hotkey(app: str, keys: str) -> dict:
+    """Focus the app's window and press a shortcut -- no screen agent needed
+    for Ctrl+A / Ctrl+S / Alt+F4-style steps (the voice model used to push
+    "select all" through quick_ui select and then use_computer)."""
+    import pyautogui
+
+    from tools.computer_use import _press_key_combo
+    from windows_control import router
+
+    def _run():
+        focused = router.focus(app)
+        if not focused.success:
+            return {"status": "error", "message": f"Не нашёл окно «{app}»: {focused.message}"}
+        time.sleep(0.15)
+        _press_key_combo(keys, pyautogui)
+        return {"status": "ok", "message": "Готово.", "method": "hotkey"}
+
+    try:
+        return await asyncio.to_thread(_run)
+    except ValueError as exc:
+        return {"status": "error", "message": f"Не понял сочетание «{keys}»: {exc}"}
+
+
 async def _try_uia(app: str, action: str, target: str, text: str) -> tuple[bool, str]:
     from windows_control import router
 
@@ -134,8 +158,13 @@ async def _try_uia(app: str, action: str, target: str, text: str) -> tuple[bool,
 async def _quick_ui(*, app: str, action: str, target: str, text: str = "") -> dict:
     if config.SYSTEM != "Windows":
         return {"status": "error", "message": "Управление окнами поддерживается только на Windows."}
-    if action not in ("click", "double_click", "right_click", "type", "read", "select"):
+    if action not in _ACTIONS:
         return {"status": "error", "message": f"Неизвестное действие «{action}»."}
+    if action == "hotkey":
+        keys = (text or target).strip()
+        if not keys:
+            return {"status": "error", "message": "Не указано сочетание клавиш."}
+        return await _hotkey(app, keys)
     if action in ("type", "select") and not text:
         return {"status": "error", "message": "Не указан текст."}
 
@@ -153,7 +182,7 @@ async def _quick_ui(*, app: str, action: str, target: str, text: str = "") -> di
         reason = f"UI Automation не справился ({message})"
 
     use_computer = IMPL_REGISTRY["use_computer"]
-    result = await use_computer(task=_screen_task(app, action, target, text))
+    result = await use_computer(task=_screen_task(app, action, target, text), simple=True)
     return {**result, "method": "use_computer", "why_screen": reason}
 
 
@@ -169,9 +198,14 @@ async def quick_ui(context: RunContext, app: str, action: QuickAction, target: s
 
     Args:
         app: The application whose window it is, e.g. "Блокнот", "Параметры", "Word".
-        action: click | double_click | right_click | type | read | select.
+        action: click | double_click | right_click | type | read | select |
+            hotkey (press a keyboard shortcut in that window, e.g. select
+            all = "ctrl+a", save = "ctrl+s"; several in a row: "ctrl+a delete").
         target: The element's visible name/label, e.g. "Сохранить", "Имя файла".
-        text: For type: the text to enter. For select: the item to pick.
+            For type into the window's main text area (Notepad, an editor)
+            any label works. For hotkey: may be left empty.
+        text: For type: the text to enter (replaces the field's content). For
+            select: the item to pick. For hotkey: the shortcut.
     """
     result = await _quick_ui(app=app, action=action, target=target, text=text)
     return result["message"]

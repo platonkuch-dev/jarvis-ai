@@ -39,6 +39,7 @@ check("effort defaults to high", config.COMPUTER_USE_EFFORT == "high")
 import pyautogui
 
 calls: list = []
+originals = {fn: getattr(pyautogui, fn) for fn in ("hotkey", "keyDown", "keyUp", "press")}
 for fn in ("press", "hotkey", "keyDown", "keyUp", "click", "moveTo", "scroll", "hscroll", "dragTo",
            "mouseDown", "mouseUp", "write"):
     setattr(pyautogui, fn, (lambda n: lambda *a, **k: calls.append((n, a, k)))(fn))
@@ -46,6 +47,7 @@ pyautogui.size = lambda: (2560, 1440)
 pyautogui.position = lambda: (10, 10)
 pyautogui.screenshot = lambda region=None: Image.new(
     "RGB", (2560, 1440) if region is None else (region[2], region[3]), "white")
+time_sleep = cu.time.sleep
 cu.time.sleep = lambda *_a, **_k: None
 
 calls.clear()
@@ -85,11 +87,35 @@ check("scroll is 120 units per notch (pyautogui passes it raw)", scrolls and scr
 _, zoom = cu._execute_action("zoom", {"region": [0, 0, 300, 200]}, 0.75, 1920, 1080, values)
 check("zoom returns an image", zoom[0]["type"] == "image")
 
+typed_calls: list = []
+real_type_text = cu._type_text
+cu._type_text = lambda text, keystrokes=False: (typed_calls.append((text, keystrokes)), "keys" if keystrokes else "paste")[1]
+typed_set: set = set()
+desc, _ = cu._execute_action("type", {"text": "hello {{random:username}}"}, 0.75, 1920, 1080, values, typed=typed_set)
+check("type is pasted first, with placeholders expanded",
+      typed_calls and typed_calls[0][0].startswith("hello ") and "{{" not in typed_calls[0][0]
+      and typed_calls[0][1] is False and "username" in values and "paste" in desc)
+cu._execute_action("type", {"text": "hello {{random:username}}"}, 0.75, 1920, 1080, values, typed=typed_set)
+check("the same text typed again falls back to keystrokes", typed_calls[-1][1] is True)
+cu._type_text = real_type_text
+
 calls.clear()
-_, _ = cu._execute_action("type", {"text": "hello {{random:username}}"}, 0.75, 1920, 1080, values)
-typed = [c for c in calls if c[0] == "write"]
-check("ASCII text goes through pyautogui.write with placeholders expanded",
-      typed and typed[0][1][0].startswith("hello ") and "{{" not in typed[0][1][0] and "username" in values)
+desc, content = cu._execute_action("left_click", {"coordinate": [960, 540]}, 0.75, 1920, 1080, values, observe=False)
+check("a mid-batch action returns text, not a screenshot", content == cu._BATCH_OK)
+
+check("stuck signature snaps nearby clicks together",
+      cu._action_sig("click", {"x": 1126 * 0.75, "y": 294 * 0.75}) == cu._action_sig("click", {"x": 1128 * 0.75, "y": 295 * 0.75}))
+check("stuck signature keeps distant clicks apart",
+      cu._action_sig("left_click", {"coordinate": [100, 100]}) != cu._action_sig("left_click", {"coordinate": [300, 100]}))
+
+msgs = [{"role": "user", "content": [{"type": "text", "text": "a"}]},
+        {"role": "assistant", "content": [{"type": "text", "text": "b"}]},
+        {"role": "user", "content": [{"type": "tool_result", "tool_use_id": "x", "content": "OK"}]}]
+cu._mark_cache(msgs)
+first = [b for m in msgs for b in m["content"] if "cache_control" in b]
+cu._mark_cache(msgs + [{"role": "user", "content": [{"type": "text", "text": "c"}]}])
+check("one rolling cache breakpoint: set on the newest block, then moved on",
+      first == [msgs[-1]["content"][-1]] and not any("cache_control" in b for m in msgs for b in m["content"]))
 check("the same placeholder gives the same value within a run",
       cu._resolve_placeholders("{{random:username}}", values) == values["username"])
 pw = cu._random_value("password")
@@ -175,13 +201,57 @@ check("identical actions repeated are aborted as stuck", res.startswith("Зас�
 (res, *_), _ = run([reply(use(f"t{i}", "screenshot")) for i in range(40)], max_steps=5)
 check("the action budget is enforced", "5 действий" in res)
 
+cu._type_text = lambda text, keystrokes=False: "paste"
 (res, steps, vals, _), _ = run([
     reply(use("t1", "type", text="pw: {{random:password}}")),
     reply(text("ok"), stop="end_turn"),
 ])
 check("typed text is logged by length only, generated values are reported",
-      steps[1] == f"type ({len('pw: {{random:password}}')} симв.)" and "password" in vals
+      steps[1] == f"type ({len('pw: {{random:password}}')} симв., paste)" and "password" in vals
       and vals["password"] not in " ".join(steps))
+
+(res, *_), fake = run([
+    reply(use("t1", "left_click", coordinate=[5, 5]), use("t2", "type", text="hi"), use("t3", "key", text="Return")),
+    reply(text("ok"), stop="end_turn"),
+])
+batch = fake.sent[1]["messages"][-1]["content"]
+check("a batch gets one screenshot, after its last action",
+      batch[0]["content"] == cu._BATCH_OK and batch[1]["content"] == cu._BATCH_OK
+      and batch[2]["content"][0]["type"] == "image")
+check("the newest message carries the cache breakpoint", "cache_control" in batch[-1])
+cu._type_text = real_type_text
+
+(res, *_), fake = run([reply(use("t1", "left_click", coordinate=[5, 5])), reply(text("ok"), stop="end_turn")])
+check("fast tier is off unless asked", fake.sent[0]["output_config"] == {"effort": "high"})
+fake = FakeClient([reply(text("ok"), stop="end_turn")])
+cu.anthropic.Anthropic = lambda **k: fake
+cu._run_loop("t", 5, True)
+check("fast tier lowers the effort", fake.sent[0]["output_config"] == {"effort": config.COMPUTER_USE_FAST_EFFORT})
+check("prompt says the first screenshot is already attached", "уже приложен" in cu._SYSTEM_PROMPT
+      and "уже приложен" in cu._OPENAI_SYSTEM_PROMPT)
+
+# --- escalation: a stuck fast run is retried on the full tier ----------------
+
+import asyncio
+
+tiers: list = []
+
+
+def fake_loop(task, steps_cap, fast=False, values=None):
+    tiers.append((fast, steps_cap))
+    return ("Застрял: ..." if fast else "Готово."), ["s"], values or {}, (1, 1)
+
+
+real_loops = cu._run_loop, cu._run_openai_loop
+cu._run_loop = cu._run_openai_loop = fake_loop
+cu._log_run = lambda *a, **k: None
+cu.usage_tracker.check_budget = lambda *_a: None
+config.SYSTEM, config.ANTHROPIC_API_KEY, config.OPENAI_API_KEY = "Windows", "test", "test"
+out = asyncio.run(cu._use_computer(task="x", simple=True))
+check("a stuck fast run escalates to the full tier once",
+      out["message"] == "Готово." and [t[0] for t in tiers] == [True, False]
+      and tiers[0][1] == config.COMPUTER_USE_FAST_MAX_STEPS)
+cu._run_loop, cu._run_openai_loop = real_loops
 
 (res, *_), fake = run([reply(text("never"), stop="end_turn")], stop=True)
 check("the stop flag aborts before any API call is made", res.startswith("Остановлено") and fake.sent == [])
@@ -210,6 +280,7 @@ try:
     check("SendInput INPUT struct has the size Windows expects (40 bytes on 64-bit)",
           ctypes.sizeof(cu._INPUT) == (40 if ctypes.sizeof(ctypes.c_void_p) == 8 else 28))
     if fg == ours and root.focus_get() is entry:
+        cu.time.sleep = time_sleep
         cu._send_unicode("Привет, мир! 你好")
         for _ in range(40):
             root.update()
@@ -223,6 +294,24 @@ try:
     root.destroy()
 except Exception as exc:                                                          # pragma: no cover
     print(f"[SKIP] Unicode typing test unavailable: {exc}")
+
+
+# --- clipboard + keyboard layout (checked by hand in real Notepad as well) ----
+
+from windows_control import keyboard_mouse
+from pyautogui import _pyautogui_win as _win
+
+keyboard_mouse.fix_key_mapping()
+check("Ctrl+<letter> uses layout-independent virtual keys (a Cyrillic layout gave -1)",
+      _win.keyboardMapping["a"] == 0x41 and _win.keyboardMapping["v"] == 0x56 and _win.keyboardMapping["l"] == 0x4C)
+check("every printable ASCII key has a real mapping", all(_win.keyboardMapping[chr(c)] >= 0 for c in range(32, 127)))
+
+saved = keyboard_mouse.get_clipboard_text()
+sample = "Вставка: Hello (World) {+^%~}\nвторая строка"
+keyboard_mouse.set_clipboard_text(sample)
+check("private clipboard text round-trips (Unicode, newlines)", keyboard_mouse.get_clipboard_text() == sample)
+if saved is not None:
+    keyboard_mouse.set_clipboard_text(saved, private=False)
 
 print()
 if failures:

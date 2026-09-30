@@ -25,7 +25,7 @@ CLAUDE_THINKING_MAX_TOKENS  = 12000
 GEMINI_TEXT_MODEL  = "gemini-2.5-flash"
 GEMINI_LITE_MODEL  = "gemini-2.5-flash-lite"
 GEMINI_LIVE_MODEL  = "models/gemini-2.5-flash-native-audio-preview-12-2025"
-GEMINI_VOICE_NAME  = "Puck"
+GEMINI_VOICE_NAME  = "Charon"
 
 DEFAULT_PROVIDER = "claude"
 

@@ -174,6 +174,83 @@ OPENAI_MODEL = os.environ.get("OPENAI_MODEL", "gpt-6-luna")
 # reasoning for tool-use quality without adding much latency to a voice turn.
 OPENAI_REASONING_EFFORT = os.environ.get("OPENAI_REASONING_EFFORT", "low")
 
+# LLM_PROVIDER=ollama: the conversation runs on a local model, free and with
+# no network round trip. The model needs a context window that fits the
+# system prompt + ~40 tool schemas (~12k tokens) -- Ollama's default 4k
+# silently truncates it, so scripts/setup_local_llm.bat builds a "jarvis"
+# variant of the model with num_ctx raised (see that script).
+OLLAMA_MODEL = os.environ.get("OLLAMA_MODEL", "jarvis-qwen3")
+OLLAMA_BASE_URL = os.environ.get("OLLAMA_BASE_URL", "http://localhost:11434/v1")
+OLLAMA_TEMPERATURE = float(os.environ.get("OLLAMA_TEMPERATURE", "0.7"))
+# "none" = answer straight away (fast voice turns); "low"/"medium" = think first.
+OLLAMA_REASONING_EFFORT = os.environ.get("OLLAMA_REASONING_EFFORT", "none")
+# Conversation items (messages + tool calls/results) sent to the local model.
+OLLAMA_MAX_HISTORY_ITEMS = int(os.environ.get("OLLAMA_MAX_HISTORY_ITEMS", "24"))
+
+# LLM_PROVIDER=claude_code: the conversation runs inside one long-lived local
+# `claude` CLI process (claude_code_llm.py), billed against the Claude.ai
+# subscription `claude` is logged into -- no ANTHROPIC_API_KEY involved. It
+# gets Claude Code's own tools (PowerShell, files, web) plus every Jarvis
+# tool, served to it over a local MCP endpoint (jarvis_mcp.py).
+# Model alias or full id: "haiku" (fastest voice turns), "sonnet", "opus".
+CLAUDE_CODE_MODEL = os.environ.get("CLAUDE_CODE_MODEL", "sonnet")
+# Extended thinking adds seconds of silence before every spoken reply
+# (measured ~3 s on haiku), so it is off unless asked for.
+CLAUDE_CODE_THINKING = os.environ.get("CLAUDE_CODE_THINKING", "0").strip().lower() in ("1", "true", "yes", "on")
+# Continue the same Claude Code conversation after a restart (--resume).
+CLAUDE_CODE_RESUME = os.environ.get("CLAUDE_CODE_RESUME", "1").strip().lower() in ("1", "true", "yes", "on")
+CLAUDE_CODE_SESSION_FILE = DATA_DIR / "claude_code_session.json"
+# Where the `claude` process runs; its CLAUDE.md there is read every session.
+CLAUDE_CODE_WORKDIR = Path(os.environ.get("CLAUDE_CODE_WORKDIR", str(DATA_DIR / "claude_workspace")))
+# Full access to the PC with voice confirmation for dangerous steps:
+# CLAUDE_CODE_ALLOWED_TOOLS run without asking; every other call (PowerShell,
+# Bash, Write, Edit, ...) that Claude Code doesn't already see as read-only
+# goes to pc_guard.py via --permission-prompt-tool -- harmless ones run,
+# dangerous ones wait for the user's spoken "да", a few are never done.
+# "bypassPermissions" skips all of that -- only if you really want that.
+CLAUDE_CODE_PERMISSION_MODE = os.environ.get("CLAUDE_CODE_PERMISSION_MODE", "default")
+CLAUDE_CODE_ALLOWED_TOOLS = os.environ.get(
+    "CLAUDE_CODE_ALLOWED_TOOLS",
+    "mcp__jarvis Skill Read Glob Grep WebSearch WebFetch TodoWrite",
+).split()
+CLAUDE_CODE_DISALLOWED_TOOLS = os.environ.get("CLAUDE_CODE_DISALLOWED_TOOLS", "").split()
+# Every fixed drive is a working directory for claude, not just the home folder.
+CLAUDE_CODE_FULL_DISK_ACCESS = os.environ.get("CLAUDE_CODE_FULL_DISK_ACCESS", "1").strip().lower() in (
+    "1", "true", "yes", "on")
+# Skills shipped with Jarvis (claude_skills/), copied into the workdir's
+# .claude/skills on start so the brain can load them.
+CLAUDE_SKILLS_SRC = BASE_DIR / "claude_skills"
+# Longest a single Jarvis tool call (use_computer, browser_task) may run
+# before Claude Code gives up on it.
+CLAUDE_CODE_MCP_TOOL_TIMEOUT_S = int(os.environ.get("CLAUDE_CODE_MCP_TOOL_TIMEOUT_S", "1800"))
+# With LLM_PROVIDER=claude_code *everything* runs on the subscription: the
+# screen agent, the browser agent, background tasks, the Telegram chat,
+# camera / vision / screen-watch looks and memory upkeep all go through
+# `claude -p` sub-agents (cc_agent.py) instead of the Anthropic API.
+SUBSCRIPTION_MODE = LLM_PROVIDER == "claude_code"
+# creationflags for console child processes (claude.exe): no window pops up.
+NO_WINDOW = 0x08000000 if platform.system() == "Windows" else 0  # CREATE_NO_WINDOW
+# Sub-agents that need judgement (screen, tasks, camera, finding UI elements).
+CLAUDE_CODE_AGENT_MODEL = os.environ.get("CLAUDE_CODE_AGENT_MODEL", "sonnet")
+# Quick/cheap ones (browser steps, screen watching, memory upkeep, the quick
+# tier of the screen agent).
+CLAUDE_CODE_FAST_MODEL = os.environ.get("CLAUDE_CODE_FAST_MODEL", "haiku")
+
+# --- Personality ---
+# "roast": banter, mild-to-strong swearing, laughs and memes where they fit.
+# "classic": the original polite concise assistant. Untrusted phone callers
+# always get the plain prompt regardless of this setting.
+JARVIS_PERSONA = os.environ.get("JARVIS_PERSONA", "classic").strip().lower()
+
+# --- Memes / sound effects spliced into speech (memes.py) ---
+# Drop .mp3/.wav/.ogg files into data/memes/; the file name (without the
+# extension) is the meme's name the LLM sees. Put laugh clips into
+# data/memes/смех/ -- one is picked at random for every [смех] tag.
+MEMES_DIR = DATA_DIR / "memes"
+MEMES_DIR.mkdir(parents=True, exist_ok=True)
+MEME_MAX_SECONDS = float(os.environ.get("MEME_MAX_SECONDS", "8"))
+MEME_VOLUME = float(os.environ.get("MEME_VOLUME", "0.8"))
+
 # --- "Heavy" computer-use agent (tools/computer_use.py) ---
 # Haiku (ANTHROPIC_MODEL above) handles ordinary conversation and calls this
 # only for multi-step visual tasks inside an application window (editing in
@@ -225,11 +302,37 @@ COMPUTER_USE_MAX_SECONDS = int(os.environ.get("COMPUTER_USE_MAX_SECONDS", "900")
 # Thinking depth. Anthropic's guidance for computer use is "high"; "low" was
 # tried before and missed targets. Cheaper: "medium". Most accurate: "xhigh".
 COMPUTER_USE_EFFORT = os.environ.get("COMPUTER_USE_EFFORT", "high")
+# Fast tier for short tasks in one window (use_computer(simple=True), and
+# quick_ui's fallback): lower thinking effort / the quick GPT-6 model, fewer
+# steps. A fast run that gets stuck or hits its step cap is retried once on
+# the full tier automatically. COMPUTER_USE_FAST_ENABLED=0 turns it off.
+COMPUTER_USE_FAST_ENABLED = os.environ.get("COMPUTER_USE_FAST_ENABLED", "1") not in ("0", "false", "False", "")
+COMPUTER_USE_FAST_EFFORT = os.environ.get("COMPUTER_USE_FAST_EFFORT", "low")
+COMPUTER_USE_FAST_MAX_STEPS = int(os.environ.get("COMPUTER_USE_FAST_MAX_STEPS", "15"))
+OPENAI_COMPUTER_USE_FAST_MODEL = os.environ.get("OPENAI_COMPUTER_USE_FAST_MODEL", "gpt-6-luna")
+OPENAI_COMPUTER_USE_FAST_REASONING_EFFORT = os.environ.get("OPENAI_COMPUTER_USE_FAST_REASONING_EFFORT", "low")
 # Longest side of the screenshots sent to the model. 1920 (~1080p) is the
 # recommended accuracy/cost balance; 1280 made small UI text hard to read on a
 # 1440p monitor. Sent as JPEG, and only the newest 3 are kept in the history.
 COMPUTER_USE_MAX_IMAGE_DIM = int(os.environ.get("COMPUTER_USE_MAX_IMAGE_DIM", "1920"))
 COMPUTER_USE_LOG_FILE = LOGS_DIR / "computer_use.log"
+
+# --- Internet: web_search / read_webpage (tools/info.py, tools/web.py) ---
+# DuckDuckGo region: "ru-ru" = Russian results first; "wt-wt" = no region.
+WEB_SEARCH_REGION = os.environ.get("WEB_SEARCH_REGION", "ru-ru")
+# Longest page text handed to the model by read_webpage.
+WEB_PAGE_MAX_CHARS = int(os.environ.get("WEB_PAGE_MAX_CHARS", "8000"))
+
+# --- Jarvis's own browser (tools/browser.py) ---
+# A visible Chrome driven through the DOM (Playwright), not screenshots.
+# Own profile, so logins made there persist and the everyday profile is
+# never touched. "chrome" = the installed Google Chrome, "msedge" = Edge.
+BROWSER_PROFILE_DIR = DATA_DIR / "browser_profile"
+BROWSER_CHANNEL = os.environ.get("BROWSER_CHANNEL", "chrome")
+# Text-only steps (element list in, action out) -- Haiku is plenty and fast.
+BROWSER_MODEL = os.environ.get("BROWSER_MODEL", ANTHROPIC_MODEL)
+BROWSER_MAX_STEPS = int(os.environ.get("BROWSER_MAX_STEPS", "30"))
+BROWSER_LOG_FILE = LOGS_DIR / "browser.log"
 
 # tools/screen_watch.py: optional, off-by-default background loop that
 # watches the screen and only ever speaks up -- it never drives the mouse or
@@ -331,6 +434,20 @@ TTS_VOICE_STATE_FILE = DATA_DIR / "tts_voice.json"
 # --- Wake hotkey / auto-sleep (desktop app, worker.py console) ---
 # Global hotkey (via the `keyboard` package) that wakes the agent from sleep.
 WAKE_HOTKEY = os.environ.get("WAKE_HOTKEY", "f10")
+# Global hotkey that turns the microphone off / back on (mic_control.py).
+MIC_HOTKEY = os.environ.get("MIC_HOTKEY", "f9")
+
+# --- HUD face with lip sync (lipsync_bridge.py -> compact_bar.FacePanel) ---
+# While Jarvis speaks, a face slides out from under the status bar and its
+# mouth follows the audio actually being played. HUD_FACE=0 turns it off.
+HUD_FACE = os.environ.get("HUD_FACE", "1") not in ("0", "false", "False", "")
+LIPSYNC_PORT = int(os.environ.get("LIPSYNC_PORT", "48123"))
+# "core" -- (default) living holographic core: a voice-reactive particle sphere in HUD rings (hud_core.py);
+# "head3d" -- volumetric talking hologram head, always in the bottom-right corner instead of the bar (hud_head3d.py);
+# "humanoid" -- faceless hologram with a burning core, streams out of an orb (hud_humanoid.py);
+# "orbs" -- the portrait as a cloud of glowing orbs; "photo" -- the realistic portrait
+# (both need scripts/make_avatar.py's images).
+HUD_FACE_STYLE = os.environ.get("HUD_FACE_STYLE", "core")
 # After this many seconds with no speech from either side, the agent mutes
 # its microphone input ("sleep") until WAKE_HOTKEY is pressed again.
 SLEEP_AFTER_SILENCE_S = float(os.environ.get("SLEEP_AFTER_SILENCE_S", "180"))
@@ -338,15 +455,72 @@ SLEEP_AFTER_SILENCE_S = float(os.environ.get("SLEEP_AFTER_SILENCE_S", "180"))
 OPEN_METEO_GEOCODE_URL = "https://geocoding-api.open-meteo.com/v1/search"
 OPEN_METEO_FORECAST_URL = "https://api.open-meteo.com/v1/forecast"
 
+# --- Spoken wake word while asleep (wake_word.py) ---
+# Local openWakeWord model ("hey jarvis"), no network and no LLM: while the
+# agent sleeps, saying "Hey Jarvis" wakes it just like WAKE_HOTKEY does.
+# WAKE_WORD_ENABLED=0 turns it off; THRESHOLD is the model score (0..1) that
+# counts as a detection -- raise it if it wakes up on its own.
+WAKE_WORD_ENABLED = os.environ.get("WAKE_WORD_ENABLED", "1").strip().lower() in ("1", "true", "yes", "on")
+WAKE_WORD_MODEL = os.environ.get("WAKE_WORD_MODEL", "hey_jarvis")
+WAKE_WORD_THRESHOLD = float(os.environ.get("WAKE_WORD_THRESHOLD", "0.5"))
+
+# --- HUD panel: face + status + subtitles + day plan on one page (hud_panel.py) ---
+# HUD_PANEL_AUTO=1: with a second monitor connected, the panel opens full
+# screen there when Jarvis starts, and the corner face hides while it's open.
+HUD_PANEL_AUTO = os.environ.get("HUD_PANEL_AUTO", "1").strip().lower() in ("1", "true", "yes", "on")
+HUD_PANEL_MONITOR = int(os.environ.get("HUD_PANEL_MONITOR", "2"))
+HUD_PANEL_PORT = int(os.environ.get("HUD_PANEL_PORT", "48125"))
+# HUD_WALLPAPER=1: Jarvis lives in Wallpaper Engine instead (scripts/install_wallpapers.py): the
+# face on the main monitor's wallpaper, the day plan on the second's. "Открой план" then just
+# clears the windows off the plan monitor so the wallpaper shows.
+HUD_WALLPAPER = os.environ.get("HUD_WALLPAPER", "0").strip().lower() in ("1", "true", "yes", "on")
+
+# tools/monitors.py look_at_screen: one cheap vision call per look.
+LOOK_SCREEN_MODEL = os.environ.get("LOOK_SCREEN_MODEL", ANTHROPIC_MODEL)
+
+# --- Briefing / news (tools/briefing.py) ---
+# City for the morning briefing's weather when the user didn't name one
+# (memory's "city" fact is tried first).
+HOME_CITY = os.environ.get("HOME_CITY", "")
+# RSS/Atom feeds for get_news, comma-separated "name=url" or bare urls.
+# Defaults are ones reachable from Ukraine (Russian outlets like ria.ru /
+# lenta.ru time out there); an unreachable feed is just skipped.
+NEWS_FEEDS = os.environ.get(
+    "NEWS_FEEDS",
+    "УНИАН=https://rss.unian.net/site/news_rus.rss,"
+    "РБК-Украина=https://www.rbc.ua/static/rss/all.rus.rss.xml,"
+    "BBC Русская служба=https://feeds.bbci.co.uk/russian/rss.xml,"
+    "Хабр=https://habr.com/ru/rss/news/?fl=ru",
+)
+
+# --- Smart home: Home Assistant (tools/smart_home.py) ---
+# Base URL (e.g. http://homeassistant.local:8123) and a long-lived access
+# token from your HA profile page. Both empty = the tool reports "not set up".
+HOME_ASSISTANT_URL = os.environ.get("HOME_ASSISTANT_URL", "").rstrip("/")
+HOME_ASSISTANT_TOKEN = os.environ.get("HOME_ASSISTANT_TOKEN", "")
+
+# --- Bluetooth LED strip, "Lotus Lantern" app (tools/led_strip.py) ---
+# MAC address of the strip; empty = find it by name over Bluetooth and remember it.
+LED_STRIP_ADDRESS = os.environ.get("LED_STRIP_ADDRESS", "").strip()
+
+# --- E-mail (tools/email_tools.py) ---
+# IMAP/SMTP with an *app password* (Gmail/Yandex/Mail.ru all issue them).
+# Reading is free and read-only; sending needs a spoken confirmation.
+EMAIL_ADDRESS = os.environ.get("EMAIL_ADDRESS", "")
+EMAIL_APP_PASSWORD = os.environ.get("EMAIL_APP_PASSWORD", "")
+EMAIL_IMAP_HOST = os.environ.get("EMAIL_IMAP_HOST", "")
+EMAIL_SMTP_HOST = os.environ.get("EMAIL_SMTP_HOST", "")
+EMAIL_SMTP_PORT = int(os.environ.get("EMAIL_SMTP_PORT", "465"))
+
 # ---------------------------------------------------------------------------
 # System-action whitelist. `system_control` refuses anything not listed here.
 # ---------------------------------------------------------------------------
-SAFE_SYSTEM_ACTIONS = ("volume", "brightness", "wifi", "bluetooth", "lock", "sleep")
+SAFE_SYSTEM_ACTIONS = ("volume", "brightness", "wifi", "bluetooth", "lock", "mute", "sleep", "shutdown", "restart")
 
 # Actions that are reversible / low-risk enough to run without a spoken
 # "да, подтверждаю" from the user. Anything in SAFE_SYSTEM_ACTIONS but NOT
-# listed here (currently just "sleep") requires confirm=True.
-SYSTEM_ACTIONS_NO_CONFIRM = ("volume", "brightness", "wifi", "bluetooth", "lock")
+# listed here (sleep, shutdown, restart) requires confirm=True.
+SYSTEM_ACTIONS_NO_CONFIRM = ("volume", "brightness", "wifi", "bluetooth", "lock", "mute")
 
 # ---------------------------------------------------------------------------
 # Application aliases for open_application / close_application.
@@ -420,6 +594,12 @@ PROJECT_SEARCH_DIRS = [d for d in (PROJECTS_DIR, Path.home() / "Desktop") if d.e
 # explicit full name rather than the "sonnet" alias so it doesn't silently
 # drift to a newer Sonnet snapshot later.
 CODING_AGENT_MODEL = os.environ.get("CODING_AGENT_MODEL", "claude-sonnet-5")
+# coding_agent "start": run Claude Code headless in the background with its
+# permissions granted up front (no window, no prompts; destructive commands
+# in CLAUDE_CODE_DISALLOWED_TOOLS stay blocked). 0 = the old visible
+# interactive terminal with Claude Code's own approval prompts.
+CODING_AGENT_BACKGROUND = os.environ.get("CODING_AGENT_BACKGROUND", "1").strip().lower() in ("1", "true", "yes", "on")
+CODING_AGENT_TIMEOUT_S = float(os.environ.get("CODING_AGENT_TIMEOUT_S", "3600"))
 FILE_SEARCH_MAX_SCAN = 20000  # safety cap on number of files walked
 
 # ---------------------------------------------------------------------------

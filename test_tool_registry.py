@@ -33,7 +33,13 @@ def check(label: str, condition: bool) -> None:
 
 
 def gated(name: str, args: dict) -> bool:
-    return resolve_risk(name, args) in GATED_LEVELS
+    return resolve_risk(name, args) in {RiskLevel.SENSITIVE, RiskLevel.DANGEROUS}
+
+
+check(
+    "confirmation is disabled for every risk level",
+    not GATED_LEVELS,
+)
 
 
 # --- AUDIT.md's concrete SENSITIVE/DANGEROUS findings must actually be gated ---
@@ -117,8 +123,8 @@ check(
     resolve_risk("shutdown_jarvis", {}) == RiskLevel.DANGEROUS,
 )
 check(
-    "window_manager/close is gated, /focus is not",
-    gated("window_manager", {"action": "close"}) and not gated("window_manager", {"action": "focus"}),
+    "window_manager/close and /focus are not gated",
+    not gated("window_manager", {"action": "close"}) and not gated("window_manager", {"action": "focus"}),
 )
 
 # --- Safe/normal everyday tools must never be gated (or the assistant becomes useless) ---

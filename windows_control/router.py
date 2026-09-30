@@ -178,8 +178,25 @@ def close(app: str = "", force: bool = False) -> ActionResult:
         return ActionResult(False, f"No window found for '{_label(app)}'.", "native")
 
     native.close_window(winfo.hwnd)
-    gone = native.wait_for_window_gone(winfo.hwnd, timeout=3.0)
+    # wait_for_window_gone() polls every 0.3s and returns the instant the
+    # window disappears -- these timeouts are only a worst-case ceiling for
+    # apps that ignore/delay WM_CLOSE, not a fixed sleep, so a normal fast
+    # close is unaffected by their size. Measured close-to-1.5s (was 3.0s)
+    # + retry-to-1.0s (was 2.0s) halves the worst case (~5s -> ~2.5s,
+    # matching a real observed max=5172ms close) for a voice command that
+    # blocks on this before Gemini's function_response can go out, while
+    # still giving a legitimately slow-but-successful close a fair chance.
+    gone = native.wait_for_window_gone(winfo.hwnd, timeout=1.5)
     method = "Native (WM_CLOSE)"
+
+    if not gone:
+        # Some apps ignore a WM_CLOSE sent from a background process until
+        # their window is foregrounded. Retry once before assuming a save
+        # prompt is blocking the graceful close.
+        if native.focus_window(winfo.hwnd):
+            native.close_window(winfo.hwnd)
+            gone = native.wait_for_window_gone(winfo.hwnd, timeout=1.0)
+            method = "Native (WM_CLOSE retry)"
 
     if not gone:
         # App is probably showing an "unsaved changes?" prompt — that's a

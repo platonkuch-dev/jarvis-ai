@@ -253,8 +253,10 @@ async def test_run_task_reports(monkeypatch, outbox):
 
 async def test_agent_loop_runs_tools_through_gate(monkeypatch):
     import agent_loop
+    import config
     from tools.registry import IMPL_REGISTRY
 
+    monkeypatch.setattr(config, "SUBSCRIPTION_MODE", False)  # this covers the direct-API loop
     calls = []
 
     async def fake_weather(*, location):

@@ -30,7 +30,16 @@ _TIMEOUT = 60.0
 async def ask(prompt: str) -> str | None:
     """Returns the CLI's reply text, or None if `claude` isn't installed,
     times out, or exits non-zero (callers should fall back to their own
-    direct-API path on None). Always None unless config.USE_CLAUDE_CLI is on."""
+    direct-API path on None). Always None unless config.USE_CLAUDE_CLI is on
+    or the whole app runs on the subscription (config.SUBSCRIPTION_MODE)."""
+    if config.SUBSCRIPTION_MODE:
+        import cc_agent
+
+        try:
+            return await cc_agent.ask(prompt, model=config.CLAUDE_CODE_FAST_MODEL, timeout=_TIMEOUT * 2)
+        except Exception as exc:
+            logger.warning("claude CLI call failed: %s", exc)
+            return None
     if not config.USE_CLAUDE_CLI:
         return None
     env = os.environ.copy()
@@ -41,6 +50,7 @@ async def ask(prompt: str) -> str | None:
             "claude", "-p", prompt,
             stdout=asyncio.subprocess.PIPE,
             stderr=asyncio.subprocess.PIPE,
+            creationflags=config.NO_WINDOW,
             env=env,
         )
         stdout, stderr = await asyncio.wait_for(proc.communicate(), timeout=_TIMEOUT)

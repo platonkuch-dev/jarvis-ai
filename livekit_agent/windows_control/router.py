@@ -363,6 +363,11 @@ def type_into(text: str, query: str = "", app: str = "", control_type: str = "",
     # control_type (no name) is a valid search on its own.
     if (query or control_type) and win is not None:
         el = uia.find_element(win, query=query, control_type=control_type)
+        if el is None and not control_type:
+            # The caller's label often isn't the control's real name ("документ"
+            # vs Notepad's "Text editor"); a window with exactly one text area
+            # leaves no doubt where the text goes.
+            el = uia.find_single_editable(win)
         if el is not None:
             res = uia.type_into_element(el, text, clear_first=clear_first)
             elapsed = time.monotonic() - t0

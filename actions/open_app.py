@@ -4,6 +4,7 @@ import subprocess
 import platform
 import shutil
 import threading
+import webbrowser
 from pathlib import Path
 
 try:
@@ -67,6 +68,27 @@ _APP_ALIASES: dict[str, dict[str, str]] = {
     "epic games":         {"Windows": "EpicGamesLauncher",       "Darwin": "Epic Games Launcher",  "Linux": "legendary"},
 }
 
+_BROWSER_START_PAGES = {
+    "chrome": "https://www.google.com",
+    "firefox": "https://www.google.com",
+    "msedge": "https://www.google.com",
+    "brave": "https://www.google.com",
+    "opera": "https://www.google.com",
+}
+
+_WEBSITE_ALIASES = {
+    "google": "https://www.google.com",
+    "youtube": "https://www.youtube.com",
+    "gmail": "https://mail.google.com",
+    "instagram": "https://www.instagram.com",
+    "facebook": "https://www.facebook.com",
+    "twitter": "https://x.com",
+    "x": "https://x.com",
+    "tiktok": "https://www.tiktok.com",
+    "reddit": "https://www.reddit.com",
+    "wikipedia": "https://www.wikipedia.org",
+}
+
 
 def _normalize(raw: str) -> str:
     key = raw.lower().strip()
@@ -79,6 +101,35 @@ def _normalize(raw: str) -> str:
             return os_map.get(_SYSTEM, raw)
 
     return raw  
+
+
+def _website_url(raw: str) -> str | None:
+    value = raw.strip().lower()
+    if value in _WEBSITE_ALIASES:
+        return _WEBSITE_ALIASES[value]
+    if value.startswith(("http://", "https://")):
+        return raw.strip()
+    if "." in value and " " not in value:
+        return "https://" + raw.strip()
+    return None
+
+
+def _open_browser_start_page(browser: str) -> bool:
+    """Launch a requested browser with a useful initial page, never about:blank."""
+    url = _BROWSER_START_PAGES[browser]
+    if _SYSTEM == "Windows":
+        executable = shutil.which(browser) or _find_app_paths_registry(browser)
+        if executable:
+            try:
+                subprocess.Popen([executable, url], stdout=subprocess.DEVNULL, stderr=subprocess.DEVNULL)
+                return True
+            except Exception as error:
+                print(f"[open_app] Browser launch failed: {error}")
+    try:
+        return bool(webbrowser.open(url, new=2))
+    except Exception as error:
+        print(f"[open_app] Browser start page failed: {error}")
+        return False
 
 def _snapshot_process_names() -> set[str]:
     if not _PSUTIL:
@@ -448,6 +499,15 @@ def open_app(
     if not app_name:
         return "No application name provided."
 
+    website = _website_url(app_name)
+    if website:
+        try:
+            if webbrowser.open(website, new=2):
+                return f"Opened {website}."
+        except Exception as error:
+            print(f"[open_app] Website launch failed: {error}")
+        return f"Failed to open {website}."
+
     launcher = _OS_LAUNCHERS.get(_SYSTEM)
     if launcher is None:
         return f"Unsupported operating system: {_SYSTEM}"
@@ -459,6 +519,10 @@ def open_app(
         player.write_log(f"[open_app] {app_name}")
 
     try:
+        if normalized.lower() in _BROWSER_START_PAGES:
+            if _open_browser_start_page(normalized.lower()):
+                return f"Opened {app_name} at Google."
+            return f"Failed to open {app_name}."
         if launcher(normalized):
             return f"Opened {app_name}."
         if normalized.lower() != app_name.lower():

@@ -1,6 +1,8 @@
-"""File-system tools: list/create/move/copy/rename/delete/read/write/find,
-scoped to the user's home directory (`_SAFE_ROOTS`) so a misheard or
-adversarial path can never escape it. Deletion goes through the Recycle Bin
+"""File-system tools: list/create/move/copy/rename/delete/read/write/find
+on every fixed drive (`_SAFE_ROOTS`). System folders (Windows, Program
+Files, ProgramData, drive roots) are read-only here, so a misheard path
+can't break Windows; changing them goes through PowerShell and pc_guard.py's
+spoken confirmation. Deletion goes through the Recycle Bin
 (send2trash), never a permanent unlink, and a fixed set of "protected"
 top-level folders (Desktop/Downloads/Documents/...) can't be deleted outright
 -- only their contents can.
@@ -33,7 +35,20 @@ except ImportError:
 
 _OS = platform.system()
 
-_SAFE_ROOTS: list[Path] = [Path.home()]
+def _fixed_drives() -> list[Path]:
+    try:
+        import psutil
+
+        return [Path(p.mountpoint) for p in psutil.disk_partitions(all=False)
+                if _OS != "Windows" or "fixed" in p.opts]
+    except Exception:
+        return []
+
+
+# Full access: the home folder and every fixed drive. System folders stay
+# read-only here (see _is_system_path); changing them goes through PowerShell
+# and pc_guard's spoken confirmation instead.
+_SAFE_ROOTS: list[Path] = [Path.home(), *_fixed_drives()]
 
 
 def _is_safe_path(target: Path) -> bool:
@@ -45,6 +60,37 @@ def _is_safe_path(target: Path) -> bool:
         )
     except Exception:
         return False
+
+
+def _system_roots() -> list[Path]:
+    if _OS != "Windows":
+        return [Path(p) for p in ("/bin", "/boot", "/etc", "/lib", "/sbin", "/usr", "/System")]
+    names = ("SystemRoot", "ProgramFiles", "ProgramFiles(x86)", "ProgramData")
+    roots = [Path(os.environ[n]) for n in names if os.environ.get(n)]
+    return roots + [Path(os.environ.get("SystemDrive", "C:") + "\\")]
+
+
+def _is_system_path(target: Path) -> bool:
+    """A system folder, or a drive root itself: file_manager won't change these."""
+    try:
+        resolved = target.resolve()
+    except Exception:
+        return True
+    if resolved.parent == resolved:  # a drive root / "/"
+        return True
+    return any(
+        resolved.is_relative_to(root) for root in _system_roots() if root.parent != root
+    )
+
+
+def _can_modify(target: Path) -> str | None:
+    """None if file_manager may change `target`, else the refusal to show."""
+    if not _is_safe_path(target):
+        return f"Доступ запрещён: {target}"
+    if _is_system_path(target):
+        return (f"Это системная папка ({target}) — через file_manager её не меняю. "
+                "Если это правда нужно, сделай через PowerShell: система спросит подтверждение у пользователя.")
+    return None
 
 
 def _xdg_or_home(env_var: str, folder: str) -> Path:
@@ -145,8 +191,8 @@ def _list_files(path: str, show_hidden: bool) -> str:
 def _create_file(path: str, name: str, content: str) -> str:
     base = _resolve_path(path)
     target = (base / name) if name else base
-    if not _is_safe_path(target):
-        return f"Доступ запрещён: {target}"
+    if refusal := _can_modify(target):
+        return refusal
     target.parent.mkdir(parents=True, exist_ok=True)
     target.write_text(content, encoding="utf-8")
     return f"Файл создан: {target.name}"
@@ -155,8 +201,8 @@ def _create_file(path: str, name: str, content: str) -> str:
 def _create_folder(path: str, name: str) -> str:
     base = _resolve_path(path)
     target = (base / name) if name else base
-    if not _is_safe_path(target):
-        return f"Доступ запрещён: {target}"
+    if refusal := _can_modify(target):
+        return refusal
     target.mkdir(parents=True, exist_ok=True)
     return f"Папка создана: {target.name}"
 
@@ -164,8 +210,8 @@ def _create_folder(path: str, name: str) -> str:
 def _delete_file(path: str, name: str) -> str:
     base = _resolve_path(path)
     target = (base / name) if name else base
-    if not _is_safe_path(target):
-        return f"Доступ запрещён: {target}"
+    if refusal := _can_modify(target):
+        return refusal
     if not target.exists():
         return f"Не найдено: {target.name}"
     if target.resolve() in _protected_dirs():
@@ -182,10 +228,10 @@ def _move_file(path: str, name: str, destination: str) -> str:
 
     if not src.exists():
         return f"Источник не найден: {src.name}"
-    if not _is_safe_path(src):
-        return f"Доступ запрещён (источник): {src}"
-    if not _is_safe_path(dst):
-        return f"Доступ запрещён (назначение): {dst}"
+    if refusal := _can_modify(src):
+        return refusal
+    if refusal := _can_modify(dst):
+        return refusal
 
     if dst.is_dir():
         dst = dst / src.name
@@ -205,8 +251,8 @@ def _copy_file(path: str, name: str, destination: str) -> str:
         return f"Источник не найден: {src.name}"
     if not _is_safe_path(src):
         return f"Доступ запрещён (источник): {src}"
-    if not _is_safe_path(dst):
-        return f"Доступ запрещён (назначение): {dst}"
+    if refusal := _can_modify(dst):
+        return refusal
 
     if dst.is_dir():
         dst = dst / src.name
@@ -221,8 +267,8 @@ def _copy_file(path: str, name: str, destination: str) -> str:
 def _rename_file(path: str, name: str, new_name: str) -> str:
     base = _resolve_path(path)
     target = (base / name) if name else base
-    if not _is_safe_path(target):
-        return f"Доступ запрещён: {target}"
+    if refusal := _can_modify(target):
+        return refusal
     if not target.exists():
         return f"Не найдено: {target.name}"
     if not new_name:
@@ -252,8 +298,8 @@ def _read_file(path: str, name: str, max_chars: int) -> str:
 def _write_file(path: str, name: str, content: str, append: bool) -> str:
     base = _resolve_path(path)
     target = (base / name) if name else base
-    if not _is_safe_path(target):
-        return f"Доступ запрещён: {target}"
+    if refusal := _can_modify(target):
+        return refusal
     target.parent.mkdir(parents=True, exist_ok=True)
     mode = "a" if append else "w"
     with open(target, mode, encoding="utf-8") as f:
@@ -425,10 +471,10 @@ async def file_manager(
     count: int = 10,
     show_hidden: bool = False,
 ) -> str:
-    """Browse, read, write, and organize files -- restricted to the user's
-    home directory (Desktop/Downloads/Documents/Pictures/Music/Videos/home).
-    Deletion always goes to the Recycle Bin, never permanent, and top-level
-    user folders can't be deleted outright.
+    """Browse, read, write, and organize files on any drive of the PC.
+    System folders (Windows, Program Files, ProgramData, drive roots) are
+    read-only here. Deletion always goes to the Recycle Bin, never permanent,
+    and top-level user folders can't be deleted outright.
 
     Args:
         action: "list" a folder; "create_file"/"create_folder"; "delete"

@@ -59,7 +59,7 @@ def normalize(text: str) -> str:
     t = text.lower().replace("ё", "е")
     t = re.sub(r"[^\w\s%+-]", " ", t)
     t = re.sub(r"\s+", " ", t).strip()
-    t = re.sub(r"^(джарвис|jarvis)\s+", "", t)
+    t = re.sub(r"^(джарвис|джервис|jarvis)\s+", "", t)
     t = re.sub(r"\s*(пожалуйста|плиз)\s*", " ", t).strip()
     return t
 
@@ -83,6 +83,38 @@ def _app(name: str) -> str | None:
 
 
 _UNIT_S = {"сек": 1, "мин": 60, "час": 3600}
+# First 5 letters of a spoken currency (any case ending) -> code for exchange_rate.
+_CURRENCY_WORDS = {
+    "долла": "USD", "бакса": "USD", "евро": "EUR", "рубля": "RUB", "рубль": "RUB", "рубли": "RUB",
+    "гривн": "UAH", "тенге": "KZT", "юаня": "CNY", "юань": "CNY", "фунта": "GBP",
+    "битко": "BTC", "битка": "BTC", "биток": "BTC", "эфира": "ETH", "эфир": "ETH", "тона": "TON",
+}
+
+
+_LED = r"(?:led |лед |светодиодн\w+ )?(?:лент\w*|подсветк\w*)"
+
+
+def _led_intent(t: str) -> Intent | None:
+    """LED strip (tools/led_strip.py): on/off, colour, brightness."""
+    if not re.search(r"лент|подсветк", t):
+        return None
+    if re.fullmatch(rf"(?:включи|зажги|вруби) {_LED}", t):
+        return Intent("led_strip", {"action": "on"})
+    if re.fullmatch(rf"(?:выключи|погаси|отключи|выруби) {_LED}", t):
+        return Intent("led_strip", {"action": "off"})
+    m = re.fullmatch(rf"(?:сделай |поставь |установи )?яркость {_LED}(?: на)? (\S+)(?: процент\w*| %|%)?", t)
+    if m:
+        value = _number(m.group(1).rstrip("%"))
+        if value is not None and 0 <= value <= 100:
+            return Intent("led_strip", {"action": "brightness", "value": str(int(value))})
+        return None
+    m = (re.fullmatch(rf"(?:сделай|поставь|включи|переключи) {_LED}(?: цвет\w*| на)? (\w+)(?: цвет\w*)?", t)
+         or re.fullmatch(rf"(?:включи |сделай |поставь )?(\w+) (?:цвет )?{_LED}", t))
+    if m:
+        from tools.led_strip import parse_color
+        if parse_color(m.group(1)):
+            return Intent("led_strip", {"action": "color", "value": m.group(1)})
+    return None
 
 
 def parse(text: str, *, computer_use_running: bool = False) -> Intent | None:
@@ -92,6 +124,10 @@ def parse(text: str, *, computer_use_running: bool = False) -> Intent | None:
 
     if computer_use_running and t in ("стоп", "хватит", "остановись", "стой", "отмена", "прекрати"):
         return Intent("stop_computer_use")
+
+    led = _led_intent(t)
+    if led:
+        return led
 
     m = re.fullmatch(r"(?:сделай |поставь |установи |выставь )?(громкость|звук|яркость)(?: на)? (\S+)(?: процент\w*| %|%)?", t)
     if m:
@@ -104,6 +140,10 @@ def parse(text: str, *, computer_use_running: bool = False) -> Intent | None:
         return Intent("volume_step", {"delta": 10})
     if re.fullmatch(r"(?:сделай )?(?:по)?тише|убавь(?: звук| громкость)?|(?:сделай )?звук тише", t):
         return Intent("volume_step", {"delta": -10})
+    if re.fullmatch(r"(?:выключи|отключи|замьють|заглуши) (?:свой |мой )?микрофон|не слушай(?: меня)?", t):
+        return Intent("set_microphone", {"on": False})
+    if re.fullmatch(r"(?:включи|верни) (?:свой |мой )?микрофон", t):
+        return Intent("set_microphone", {"on": True})
     if t in ("выключи звук", "без звука", "отключи звук", "мьют", "замьють"):
         return Intent("system_control", {"action": "volume", "value": 0})
 
@@ -131,6 +171,37 @@ def parse(text: str, *, computer_use_running: bool = False) -> Intent | None:
         return Intent(None, answer=f"Сейчас {datetime.now().strftime('%H:%M')}.")
     if t in ("какое сегодня число", "какой сегодня день", "какое число", "какая сегодня дата"):
         return Intent(None, answer=_today_phrase())
+
+    m = re.fullmatch(r"(?:открой|покажи|выведи|включи) (?:мне )?(?:план|расписание|планировщик)(?: дня| на (?:день|сегодня))?"
+                     r"(?: на (главном|основном|первом|втором|другом) (?:мониторе|экране))?", t)
+    if m:
+        where = m.group(1) or "втором"
+        return Intent("show_day_plan", {"monitor": 1 if where in ("главном", "основном", "первом") else 2})
+    if re.fullmatch(r"(?:открой|покажи|выведи) (?:свою |мне )?(?:панель|худ|себя)(?: на (?:второй|другой) (?:монитор|экран))?", t):
+        return Intent("open_hud_panel", {"monitor": 2})
+    if re.fullmatch(r"(?:открой|покажи|перейди на|переключись на|выведи) (?:мой |мне )?(?:список дел|дела|план дел)", t):
+        return Intent("show_day_plan", {"monitor": 2})
+    if t in ("закрой план", "закрой план дня", "убери план", "закрой расписание", "убери расписание", "спрячь план",
+             "закрой список дел", "убери список дел", "вернись", "вернись к лицу"):
+        return Intent("close_day_plan", {})
+    if t in ("закрой панель", "убери панель", "закрой худ"):
+        return Intent("close_hud_panel", {})
+
+    if re.fullmatch(r"(?:какие |расскажи |покажи |что (?:там )?в )?(?:последние |свежие )?новости|что нового в мире", t):
+        return Intent("get_news", {"limit": 5})
+    if re.fullmatch(r"(?:утренн(?:юю|яя) |дай |расскажи )?(?:сводк[ау]|брифинг)|что у меня (?:на )?сегодня", t):
+        return Intent("morning_briefing", {})
+    m = re.fullmatch(r"(?:какой |скажи )?курс (\w+)(?: к (\w+))?", t)
+    if m:
+        base = _CURRENCY_WORDS.get(m.group(1)[:5])
+        target = _CURRENCY_WORDS.get((m.group(2) or "рубл")[:5], "RUB")
+        if base:
+            return Intent("exchange_rate", {"base": base, "target": target})
+    if t in ("отмени таймер", "выключи таймер", "останови таймер", "сбрось таймер"):
+        return Intent("cancel_reminder", {"query": "таймер"})
+    if t in ("сколько осталось", "сколько осталось на таймере", "какие таймеры", "какие напоминания",
+             "какие у меня напоминания", "сколько на таймере"):
+        return Intent("list_reminders", {})
 
     if re.fullmatch(r"заблокируй (?:компьютер|экран|пк|комп)", t):
         return Intent("system_control", {"action": "lock"})
@@ -193,5 +264,8 @@ async def execute(intent: Intent) -> tuple[bool, str]:
         result = await impl(**intent.args)
     except Exception:
         return False, ""
-    message = result.get("message", "Готово.") if isinstance(result, dict) else "Готово."
+    if not isinstance(result, dict):
+        return True, "Готово."
+    # "speech": a version without links/lists for reading aloud, when the tool has one.
+    message = result.get("speech") or result.get("message", "Готово.")
     return True, message

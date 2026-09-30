@@ -25,18 +25,66 @@ _reminders_store = JsonStore(config.REMINDERS_FILE, default=[])
 _todos_store = JsonStore(config.TODOS_FILE, default=[])
 
 
+_RELATIVE_DAYS = {"позавчера": -2, "вчера": -1, "сегодня": 0, "завтра": 1, "послезавтра": 2}
+
+
 def _parse_datetime(value: str) -> datetime | None:
+    """Natural date/time -> datetime. Handles ISO ("2026-10-02 15:00"), Russian
+    day-first dates ("02.10", "2.10.2026 в 9:30"), relative days ("завтра в 15:00",
+    "сегодня") and "через 20 минут / 2 часа". A bare day means its 00:00."""
+    import re
+
+    text = (value or "").strip().lower().replace("ё", "е")
+    if not text:
+        return None
+    now = datetime.now()
+
+    m = re.fullmatch(r"через\s+(\d+(?:[.,]\d+)?)?\s*(минут\w*|мин|час\w*|ч|дн\w*|день)", text)
+    if m:
+        amount = float((m.group(1) or "1").replace(",", "."))
+        unit = m.group(2)
+        delta = timedelta(days=amount) if unit.startswith(("дн", "ден")) else \
+            timedelta(hours=amount) if unit.startswith("ч") else timedelta(minutes=amount)
+        return now + delta
+
+    # a time is "15:00", or "в 15.00" -- a bare "2.10" is a date, never a time
+    time_m = re.search(r"(?<!\d)(\d{1,2}):(\d{2})(?!\d)", text) or re.search(r"в\s+(\d{1,2})\.(\d{2})(?![.\d])", text)
+
+    def with_time(day: datetime) -> datetime:
+        if time_m and int(time_m.group(1)) < 24 and int(time_m.group(2)) < 60:
+            return day.replace(hour=int(time_m.group(1)), minute=int(time_m.group(2)), second=0, microsecond=0)
+        return day.replace(hour=0, minute=0, second=0, microsecond=0)
+
+    for word, shift in _RELATIVE_DAYS.items():
+        if re.search(rf"(?<!\w){word}(?!\w)", text):
+            return with_time(now + timedelta(days=shift))
+
+    try:                                   # ISO first: dayfirst must never touch it
+        return datetime.fromisoformat(text.replace(" в ", " ").strip())
+    except ValueError:
+        pass
+
+    if re.fullmatch(r"(?:в\s*)?\d{1,2}:\d{2}", text) or re.fullmatch(r"в\s*\d{1,2}\.\d{2}", text):   # only a time: today, or tomorrow if it's passed
+        t = with_time(now)
+        return t if t > now else t + timedelta(days=1)
+
+    m = re.search(r"(?<![\d:])(\d{1,2})\.(\d{1,2})(?:\.(\d{2,4}))?(?![\d:])", text)
+    if m:
+        year = int(m.group(3)) if m.group(3) else now.year
+        if year < 100:
+            year += 2000
+        try:
+            day = datetime(year, int(m.group(2)), int(m.group(1)))
+        except ValueError:
+            return None
+        return with_time(day)
+
     try:
         from dateutil import parser as dateutil_parser
 
         return dateutil_parser.parse(value, dayfirst=True, fuzzy=True)
     except Exception:
-        for fmt in ("%Y-%m-%d %H:%M", "%Y-%m-%dT%H:%M:%S", "%Y-%m-%d", "%d.%m.%Y %H:%M", "%d.%m.%Y"):
-            try:
-                return datetime.strptime(value, fmt)
-            except ValueError:
-                continue
-    return None
+        return None
 
 
 # ---------------------------------------------------------------------------
@@ -115,6 +163,65 @@ async def get_schedule(context: RunContext, date_str: str) -> str:
         date_str: The day to look up, e.g. "сегодня", "2026-09-20", "20.09".
     """
     result = await _get_schedule(date_str=date_str)
+    return result["message"]
+
+
+def _event_label(e: dict) -> str:
+    return f"«{e['title']}» {datetime.fromisoformat(e['start']).strftime('%d.%m %H:%M')}"
+
+
+@register_impl("delete_event")
+@log_call("delete_event")
+async def _delete_event(*, query: str = "", date_str: str = "", delete_all: bool = False) -> dict:
+    q = query.strip().lower()
+    day = _parse_datetime(date_str) if date_str.strip() else None
+    if date_str.strip() and day is None:
+        return {"status": "error", "message": f"Не смог разобрать дату «{date_str}»."}
+    if not q and day is None:
+        return {"status": "error", "message": "Скажите, какое событие удалить: название или день."}
+
+    def _matches(e: dict) -> bool:
+        try:
+            start = datetime.fromisoformat(e["start"])
+        except (KeyError, ValueError):
+            return False
+        if day is not None and start.date() != day.date():
+            return False
+        return not q or q in e.get("title", "").lower() or e.get("id") == q
+
+    def _mutate(data: list) -> tuple[list, tuple[list, list]]:
+        hits = sorted((e for e in data if _matches(e)), key=lambda e: e["start"])
+        if len(hits) > 1 and not delete_all:
+            return data, ([], hits)          # ambiguous: delete nothing, ask which one
+        return [e for e in data if e not in hits], (hits, [])
+
+    removed, ambiguous = await _events_store.mutate(_mutate)
+    if ambiguous:
+        listing = "; ".join(_event_label(e) for e in ambiguous[:8])
+        return {"status": "ambiguous", "message": (
+            f"Подходит несколько событий: {listing}. Уточните, какое удалить, или скажите «удали все».")}
+    if not removed:
+        what = f"«{query}»" if q else "на этот день"
+        return {"status": "not_found", "message": f"Не нашёл событий {what}."}
+    names = ", ".join(_event_label(e) for e in removed)
+    return {"status": "ok", "message": f"Удалил из календаря: {names}.", "removed": removed}
+
+
+@register_tool
+@function_tool
+async def delete_event(context: RunContext, query: str = "", date_str: str = "", delete_all: bool = False) -> str:
+    """Delete an event from the local calendar ("удали встречу с Егором",
+    "отмени CS на сегодня", "удали все события на завтра"). If several events
+    match, nothing is deleted and the matches are returned -- ask the user
+    which one, then call again with a more specific query or date. Only pass
+    delete_all=True when the user clearly asked to remove all of them.
+
+    Args:
+        query: Part of the event's title, e.g. "Егор" or "CS". Empty = any title.
+        date_str: Optional day to narrow it down: "сегодня", "завтра", "2026-10-02".
+        delete_all: True to delete every matching event at once.
+    """
+    result = await _delete_event(query=query, date_str=date_str, delete_all=delete_all)
     return result["message"]
 
 
@@ -229,18 +336,86 @@ async def _set_timer(*, minutes: float, label: str = "") -> dict:
     if minutes <= 0:
         return {"status": "error", "message": "Длительность таймера должна быть больше нуля."}
     await _add_reminder(label or f"на {minutes:g} минут", datetime.now() + timedelta(minutes=minutes), "timer")
-    return {"status": "ok", "message": f"Таймер на {minutes:g} минут запущен."}
+    named = f" «{label}»" if label else ""
+    return {"status": "ok", "message": f"Таймер{named} на {minutes:g} минут запущен."}
 
 
 @register_tool
 @function_tool
-async def set_timer(context: RunContext, minutes: float) -> str:
+async def set_timer(context: RunContext, minutes: float, label: str = "") -> str:
     """Start a countdown timer that announces itself out loud when it ends.
+    Several can run at once; give each a label if the user named it.
 
     Args:
-        minutes: Timer duration in minutes.
+        minutes: Timer duration in minutes (0.5 = 30 seconds).
+        label: Optional name, e.g. "паста" or "стирка".
     """
-    result = await _set_timer(minutes=minutes)
+    result = await _set_timer(minutes=minutes, label=label)
+    return result["message"]
+
+
+def _left(at: datetime, now: datetime) -> str:
+    secs = max(0, int((at - now).total_seconds()))
+    if secs < 3600:
+        return f"через {secs // 60} мин {secs % 60} с"
+    if at.date() == now.date():
+        return f"в {at.strftime('%H:%M')}"
+    return at.strftime("%d.%m %H:%M")
+
+
+@register_impl("list_reminders")
+@log_call("list_reminders")
+async def _list_reminders() -> dict:
+    now = datetime.now()
+    items = sorted(await _reminders_store.load(), key=lambda r: r.get("at", ""))
+    if not items:
+        return {"status": "ok", "message": "Активных таймеров и напоминаний нет.", "reminders": []}
+    lines = []
+    for r in items:
+        kind = "таймер" if r.get("kind") == "timer" else "напоминание"
+        lines.append(f"{kind} «{r.get('text', '')}» — {_left(datetime.fromisoformat(r['at']), now)}")
+    return {"status": "ok", "message": "; ".join(lines) + ".", "reminders": items}
+
+
+@register_tool
+@function_tool
+async def list_reminders(context: RunContext) -> str:
+    """List active timers and reminders with the time left ("сколько осталось на таймере?")."""
+    result = await _list_reminders()
+    return result["message"]
+
+
+@register_impl("cancel_reminder")
+@log_call("cancel_reminder")
+async def _cancel_reminder(*, query: str = "") -> dict:
+    q = query.strip().lower()
+
+    def _mutate(data: list) -> tuple[list, list]:
+        if q in ("", "все", "всё", "all"):
+            return [], data
+        if q in ("таймер", "timer"):
+            hit = [r for r in data if r.get("kind") == "timer"][-1:]
+        else:
+            hit = [r for r in data if q in r.get("text", "").lower() or r.get("id") == q][:1]
+        return [r for r in data if r not in hit], hit
+
+    removed = await _reminders_store.mutate(_mutate)
+    if not removed:
+        return {"status": "not_found", "message": f"Не нашёл таймер или напоминание «{query}»."}
+    names = ", ".join(f"«{r.get('text', '')}»" for r in removed)
+    return {"status": "ok", "message": f"Отменил: {names}."}
+
+
+@register_tool
+@function_tool
+async def cancel_reminder(context: RunContext, query: str = "") -> str:
+    """Cancel a timer or reminder by part of its text/label. "таймер" cancels the
+    latest timer; empty or "все" cancels everything.
+
+    Args:
+        query: Text identifying which one, e.g. "паста"; "все" for all.
+    """
+    result = await _cancel_reminder(query=query)
     return result["message"]
 
 

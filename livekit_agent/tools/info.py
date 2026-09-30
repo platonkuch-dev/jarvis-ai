@@ -1,4 +1,5 @@
-"""Lookup tools: web search, weather (Open-Meteo, no API key needed), calculator.
+"""Lookup tools: web search, weather + forecast (Open-Meteo, no API key needed),
+exchange rates (fiat + crypto, keyless public APIs), calculator.
 
 `calculate` never calls `eval`/`exec` -- it walks a parsed AST and only allows
 numeric literals plus a small whitelist of operators and math functions.
@@ -25,15 +26,20 @@ from tools.registry import register_impl, register_tool
 
 @register_impl("web_search")
 @log_call("web_search")
-async def _web_search(*, query: str) -> dict:
+async def _web_search(*, query: str, max_results: int = 5) -> dict:
     try:
-        from duckduckgo_search import DDGS
+        from ddgs import DDGS
     except ImportError:
-        return {"status": "error", "message": "Веб-поиск недоступен: не установлен duckduckgo_search."}
+        try:  # the package's old name
+            from duckduckgo_search import DDGS
+        except ImportError:
+            return {"status": "error", "message": "Веб-поиск недоступен: не установлен ddgs."}
+
+    max_results = max(1, min(int(max_results), 10))
 
     def _search() -> list[dict]:
         with DDGS() as ddgs:
-            return list(ddgs.text(query, max_results=5))
+            return list(ddgs.text(query, region=config.WEB_SEARCH_REGION, max_results=max_results))
 
     try:
         results = await asyncio.to_thread(_search)
@@ -43,21 +49,27 @@ async def _web_search(*, query: str) -> dict:
     if not results:
         return {"status": "not_found", "message": f"По запросу «{query}» ничего не найдено."}
 
-    top = results[0]
-    summary = top.get("body") or top.get("title") or ""
-    message = f"{top.get('title', '')}: {summary[:280]}"
+    lines = [
+        f"{i}. {r.get('title', '')} — {(r.get('body') or '')[:300]} [{r.get('href', '')}]"
+        for i, r in enumerate(results, 1)
+    ]
+    message = ("\n".join(lines) + "\n\nЕсли сниппетов мало для точного ответа — прочитай нужную "
+               "страницу через read_webpage.")
     return {"status": "ok", "message": message, "results": results}
 
 
 @register_tool
 @function_tool
-async def web_search(context: RunContext, query: str) -> str:
-    """Search the web and return a short summary of the top result.
+async def web_search(context: RunContext, query: str, max_results: int = 5) -> str:
+    """Search the internet (DuckDuckGo): titles, snippets and links of the top results.
+    For fresh facts (news, prices, rates, schedules, scores) follow up with
+    read_webpage on the best link instead of guessing from the snippets.
 
     Args:
-        query: The search query.
+        query: The search query, in the user's language.
+        max_results: How many results to return (1-10).
     """
-    result = await _web_search(query=query)
+    result = await _web_search(query=query, max_results=max_results)
     return result["message"]
 
 
@@ -90,9 +102,20 @@ _WEATHER_CODES = {
 }
 
 
+_WEEKDAYS_RU = ["пн", "вт", "ср", "чт", "пт", "сб", "вс"]
+
+
+def _condition(code: object) -> str:
+    try:
+        return _WEATHER_CODES.get(int(code), "неизвестные условия")  # type: ignore[arg-type]
+    except (TypeError, ValueError):
+        return "неизвестные условия"
+
+
 @register_impl("get_weather")
 @log_call("get_weather")
-async def _get_weather(*, location: str) -> dict:
+async def _get_weather(*, location: str, days: int = 0) -> dict:
+    days = max(0, min(int(days or 0), 7))
     try:
         async with httpx.AsyncClient(timeout=10) as client:
             geo_resp = await client.get(
@@ -105,41 +128,144 @@ async def _get_weather(*, location: str) -> dict:
                 return {"status": "not_found", "message": f"Не нашёл город «{location}»."}
 
             place = candidates[0]
-            forecast_resp = await client.get(
-                config.OPEN_METEO_FORECAST_URL,
-                params={
-                    "latitude": place["latitude"],
-                    "longitude": place["longitude"],
-                    "current_weather": "true",
-                },
-            )
+            params: dict = {
+                "latitude": place["latitude"],
+                "longitude": place["longitude"],
+                "current_weather": "true",
+                "timezone": "auto",
+            }
+            if days:
+                params["daily"] = "weathercode,temperature_2m_max,temperature_2m_min,precipitation_probability_max"
+                params["forecast_days"] = days
+            forecast_resp = await client.get(config.OPEN_METEO_FORECAST_URL, params=params)
             forecast_resp.raise_for_status()
-            current = forecast_resp.json().get("current_weather", {})
+            data = forecast_resp.json()
+            current = data.get("current_weather", {})
     except Exception as exc:
         return {"status": "error", "message": f"Не удалось получить погоду: {exc}"}
 
     if not current:
         return {"status": "error", "message": "Сервис погоды не вернул данные."}
 
-    code = int(current.get("weathercode", -1))
-    condition = _WEATHER_CODES.get(code, "неизвестные условия")
+    condition = _condition(current.get("weathercode", -1))
     temp = current.get("temperature")
     wind = current.get("windspeed")
     place_name = place.get("name", location)
 
     message = f"В городе {place_name}: {condition}, {temp}°C, ветер {wind} км/ч."
+    daily = data.get("daily") or {}
+    if days and daily.get("time"):
+        from datetime import date
+
+        rains = daily.get("precipitation_probability_max") or []
+        parts = []
+        for i, day in enumerate(daily["time"]):
+            d = date.fromisoformat(day)
+            rain = rains[i] if i < len(rains) else None
+            rain_txt = f", осадки {rain}%" if rain is not None else ""
+            label = f"{_WEEKDAYS_RU[d.weekday()]} {d.strftime('%d.%m')}: " if days > 1 else ""
+            parts.append(
+                f"{label}{_condition(daily['weathercode'][i])}, "
+                f"{daily['temperature_2m_min'][i]:.0f}…{daily['temperature_2m_max'][i]:.0f}°C{rain_txt}"
+            )
+        message += (" Прогноз: " if days > 1 else " За день: ") + "; ".join(parts) + "."
     return {"status": "ok", "message": message, "temperature": temp, "condition": condition}
 
 
 @register_tool
 @function_tool
-async def get_weather(context: RunContext, location: str) -> str:
-    """Get the current weather for a city.
+async def get_weather(context: RunContext, location: str, days: int = 0) -> str:
+    """Get the current weather for a city, optionally with a daily forecast.
 
     Args:
         location: City name, e.g. "Москва" or "Berlin".
+        days: 0 = only now; 1-7 = also a day-by-day forecast (1 = today,
+            2 = today+tomorrow, 7 = the week).
     """
-    result = await _get_weather(location=location)
+    result = await _get_weather(location=location, days=days)
+    return result["message"]
+
+
+# ---------------------------------------------------------------------------
+# exchange_rate (fiat: open.er-api.com, crypto: CoinGecko -- both keyless)
+# ---------------------------------------------------------------------------
+
+_FIAT_ALIASES = {
+    "доллар": "USD", "бакс": "USD", "usd": "USD", "евро": "EUR", "eur": "EUR", "рубл": "RUB", "rub": "RUB",
+    "гривн": "UAH", "тенге": "KZT", "юан": "CNY", "фунт": "GBP", "иен": "JPY", "йен": "JPY",
+    "франк": "CHF", "лир": "TRY", "злот": "PLN", "бел": "BYN", "дирхам": "AED", "лари": "GEL",
+    "драм": "AMD", "сум": "UZS",
+}
+_CRYPTO_ALIASES = {
+    "биткоин": "bitcoin", "биток": "bitcoin", "btc": "bitcoin", "bitcoin": "bitcoin",
+    "эфир": "ethereum", "eth": "ethereum", "ethereum": "ethereum", "тон": "the-open-network",
+    "ton": "the-open-network", "солан": "solana", "sol": "solana", "usdt": "tether", "тезер": "tether",
+    "доги": "dogecoin", "doge": "dogecoin", "xrp": "ripple", "рипл": "ripple", "bnb": "binancecoin",
+}
+
+
+def _resolve(name: str, table: dict[str, str]) -> str | None:
+    q = name.strip().lower()
+    if q in table:
+        return table[q]
+    return next((v for k, v in table.items() if len(k) > 3 and q.startswith(k)), None)
+
+
+def _money(value: float) -> str:
+    return f"{value:,.2f}".replace(",", " ")
+
+
+@register_impl("exchange_rate")
+@log_call("exchange_rate")
+async def _exchange_rate(*, base: str, target: str = "RUB", amount: float = 1.0) -> dict:
+    amount = float(amount or 1.0)
+    crypto = _resolve(base, _CRYPTO_ALIASES)
+    fiat_target = _resolve(target, _FIAT_ALIASES) or target.strip().upper()
+    try:
+        async with httpx.AsyncClient(timeout=10) as client:
+            if crypto:
+                vs = fiat_target.lower()
+                resp = await client.get(
+                    "https://api.coingecko.com/api/v3/simple/price",
+                    params={"ids": crypto, "vs_currencies": vs, "include_24hr_change": "true"},
+                )
+                resp.raise_for_status()
+                row = resp.json().get(crypto) or {}
+                if vs not in row:
+                    return {"status": "not_found", "message": f"Нет курса {base} к {fiat_target}."}
+                change = row.get(f"{vs}_24h_change")
+                change_txt = f", за сутки {change:+.1f}%" if change is not None else ""
+                total = row[vs] * amount
+                return {"status": "ok", "value": total,
+                        "message": f"{amount:g} {base} = {_money(total)} {fiat_target}{change_txt}."}
+
+            fiat_base = _resolve(base, _FIAT_ALIASES) or base.strip().upper()
+            resp = await client.get(f"https://open.er-api.com/v6/latest/{fiat_base}")
+            resp.raise_for_status()
+            data = resp.json()
+    except Exception as exc:
+        return {"status": "error", "message": f"Не удалось получить курс: {exc}"}
+
+    rate = (data.get("rates") or {}).get(fiat_target)
+    if data.get("result") != "success" or rate is None:
+        return {"status": "not_found", "message": f"Не знаю валюту «{base}» или «{target}»."}
+    total = rate * amount
+    return {"status": "ok", "value": total,
+            "message": f"{amount:g} {fiat_base} = {_money(total)} {fiat_target}."}
+
+
+@register_tool
+@function_tool
+async def exchange_rate(context: RunContext, base: str, target: str = "RUB", amount: float = 1.0) -> str:
+    """Current exchange rate / conversion for currencies and crypto (BTC, ETH,
+    TON, SOL, USDT...). Informational only -- never give investment advice.
+
+    Args:
+        base: What to convert: currency code or name ("USD", "евро", "биткоин").
+        target: Currency to express it in, default "RUB".
+        amount: How many units of `base`, default 1.
+    """
+    result = await _exchange_rate(base=base, target=target, amount=amount)
     return result["message"]
 
 

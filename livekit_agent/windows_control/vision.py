@@ -51,6 +51,11 @@ def capture(region: tuple[int, int, int, int] | None = None) -> tuple[bytes, tup
 
 
 def _locate_with_claude(image_bytes: bytes, prompt: str) -> str | None:
+    if config.SUBSCRIPTION_MODE:
+        import cc_agent
+
+        return cc_agent.ask_sync(prompt, images=[cc_agent.image_block(image_bytes, "image/png")],
+                                 model=config.CLAUDE_CODE_AGENT_MODEL, timeout=60)
     if not config.ANTHROPIC_API_KEY:
         return None
     import base64
@@ -85,7 +90,7 @@ def locate_element(
     Returns absolute SCREEN coordinates (already offset by `region`, if given)
     or None if not found / no API key configured.
     """
-    if not config.ANTHROPIC_API_KEY:
+    if not config.ANTHROPIC_API_KEY and not config.SUBSCRIPTION_MODE:
         print("[Vision] No Anthropic API key configured — vision fallback unavailable.")
         return None
 

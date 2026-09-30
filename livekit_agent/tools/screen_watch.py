@@ -96,9 +96,14 @@ def _computer_use_active() -> bool:
         return False
 
 
-def _classify(client: anthropic.Anthropic, img) -> str:
+def _classify(client: anthropic.Anthropic | None, img) -> str:
     small = img.copy()
     small.thumbnail((config.SCREEN_WATCH_MAX_IMAGE_DIM, config.SCREEN_WATCH_MAX_IMAGE_DIM))
+    if client is None:  # config.SUBSCRIPTION_MODE
+        import cc_agent
+
+        return cc_agent.ask_sync("Что на экране?", system=_SYSTEM_PROMPT, images=[_jpeg_block(small)],
+                                 model=config.CLAUDE_CODE_FAST_MODEL, timeout=60).strip()
     response = client.messages.create(
         model=config.SCREEN_WATCH_MODEL,
         max_tokens=120,
@@ -118,9 +123,9 @@ def _log(note: str) -> None:
 
 
 async def _watch_loop() -> None:
-    import pyautogui
+    import screens
 
-    client = anthropic.Anthropic(api_key=config.ANTHROPIC_API_KEY, timeout=30.0)
+    client = None if config.SUBSCRIPTION_MODE else anthropic.Anthropic(api_key=config.ANTHROPIC_API_KEY, timeout=30.0)
     last_thumb: bytes | None = None
     last_call = 0.0
 
@@ -135,7 +140,7 @@ async def _watch_loop() -> None:
                 continue
 
             try:
-                img = await asyncio.to_thread(pyautogui.screenshot)
+                img = await asyncio.to_thread(screens.grab, 0)  # every monitor, stitched
                 thumb = _downsample_gray(img)
                 diff = _diff_fraction(thumb, last_thumb) if last_thumb is not None else 1.0
                 last_thumb = thumb
@@ -161,7 +166,7 @@ async def _watch_screen() -> dict:
     global _WATCH_TASK
     if config.SYSTEM != "Windows":
         return {"status": "error", "message": "Наблюдение за экраном поддерживается только на Windows."}
-    if not config.ANTHROPIC_API_KEY:
+    if not config.ANTHROPIC_API_KEY and not config.SUBSCRIPTION_MODE:
         return {"status": "error", "message": "Не задан ANTHROPIC_API_KEY."}
     if _WATCH_TASK is not None and not _WATCH_TASK.done():
         return {"status": "ok", "message": "Уже слежу за экраном."}

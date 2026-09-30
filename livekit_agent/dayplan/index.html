@@ -1,0 +1,991 @@
+<!doctype html>
+<html lang="ru">
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width, initial-scale=1">
+<title>Jarvis</title>
+<link rel="preconnect" href="https://fonts.googleapis.com">
+<link rel="preconnect" href="https://fonts.gstatic.com" crossorigin>
+<link href="https://fonts.googleapis.com/css2?family=Oxanium:wght@300;500;700&family=Manrope:wght@400;500;600;700&display=swap" rel="stylesheet">
+<style>
+  :root {
+    --night: #02060D;
+    --holo: #6FD8FF;
+    --holo-dim: rgba(111, 216, 255, 0.22);
+    --amber: #FFB54A;
+    --ice: #DDF3FF;
+    --steel: #58748F;
+    --display: "Oxanium", "Segoe UI", sans-serif;
+    --text: "Manrope", "Segoe UI", sans-serif;
+    --ease: cubic-bezier(0.2, 0.8, 0.2, 1);
+  }
+  * { box-sizing: border-box; margin: 0; padding: 0; }
+  html, body { height: 100%; overflow: hidden; }
+  body {
+    background:
+      linear-gradient(180deg, #02060D 0%, #04101F 48%, #071A30 62%, #02060D 100%);
+    color: var(--ice); font-family: var(--text); -webkit-font-smoothing: antialiased;
+  }
+  canvas { position: fixed; inset: 0; width: 100vw; height: 100vh; display: block; }
+  #fx { z-index: 0; }
+  #gl { z-index: 1; }
+
+  .ui { position: fixed; inset: 0; z-index: 2; pointer-events: none;
+        padding: clamp(24px, 3.2vh, 48px) clamp(24px, 2.6vw, 56px); }
+  header { display: flex; justify-content: space-between; align-items: flex-start; }
+  .day { font-family: var(--display); font-weight: 300; font-size: clamp(26px, 3.1vh, 40px); }
+  .day b { font-weight: 700; }
+  .greet { color: var(--steel); font-size: clamp(14px, 1.6vh, 19px); margin-top: 6px; }
+  .now { text-align: right; }
+  .hm { font-family: var(--display); font-weight: 300; font-size: clamp(44px, 6.4vh, 84px); line-height: 1; letter-spacing: -0.01em; }
+  .hm .s { font-size: 0.36em; color: var(--holo); opacity: 0.6; vertical-align: 1.1em; margin-left: 0.1em; }
+  .weather { color: var(--steel); font-size: clamp(14px, 1.6vh, 19px); margin-top: 8px; }
+  .weather .t { color: var(--holo); font-family: var(--display); font-weight: 500; }
+
+  /* the day plan: the original ring page, opened out of the source orb */
+  #plan { position: fixed; inset: 0; width: 100vw; height: 100vh; border: 0; z-index: 4; opacity: 0;
+          pointer-events: none; clip-path: circle(0 at var(--ox, 50%) var(--oy, 80%));
+          transition: clip-path 1.1s cubic-bezier(0.7, 0, 0.2, 1), opacity 0.4s; }
+  body.plan #plan { opacity: 1; clip-path: circle(150% at var(--ox, 50%) var(--oy, 80%)); pointer-events: auto; }
+  body.plan .status { opacity: 0 !important; }
+  .face-only #planBtn, .face-only #plan, .face-only .hint { display: none; }
+
+  /* HUD telemetry: two quiet readout columns either side of the bust */
+  .tele { position: fixed; z-index: 2; top: 30vh; width: clamp(240px, 15vw, 380px); pointer-events: none;
+          font-family: var(--display); color: var(--ice); transition: opacity 0.8s; }
+  .tele.l { left: clamp(24px, 2.6vw, 64px); }
+  .tele.r { right: clamp(24px, 2.6vw, 64px); text-align: right; }
+  .tele h3 { font-weight: 500; font-size: clamp(11px, 1.05vh, 15px); letter-spacing: 0.22em; color: var(--holo);
+             padding-bottom: 8px; margin-bottom: 14px; border-bottom: 1px solid var(--holo-dim); }
+  .tele .row { margin-bottom: clamp(12px, 1.7vh, 22px); }
+  .tele .k { font-size: clamp(10px, 0.95vh, 13px); letter-spacing: 0.18em; color: var(--steel); }
+  .tele .v { font-weight: 300; font-size: clamp(20px, 2.3vh, 32px); font-variant-numeric: tabular-nums; margin-top: 2px; }
+  .tele .v small { font-size: 0.5em; color: var(--steel); margin-left: 6px; letter-spacing: 0.06em; }
+  .tele .bar { height: 3px; margin-top: 6px; background: rgba(111, 216, 255, 0.12); position: relative; }
+  .tele .bar i { position: absolute; top: 0; bottom: 0; left: 0; background: var(--holo); box-shadow: 0 0 8px var(--holo); transition: width 0.8s; }
+  .tele .bar.hot i { background: var(--amber); box-shadow: 0 0 8px var(--amber); }
+  .tele canvas { position: static; width: 100%; height: clamp(40px, 5vh, 72px); display: block; margin-top: 6px; }
+  body.plan .tele { opacity: 0 !important; }
+  .status { position: fixed; z-index: 2; font-family: var(--display); font-weight: 500; font-size: clamp(11px, 1.15vh, 14px);
+            letter-spacing: 0.16em; color: var(--holo); white-space: nowrap; pointer-events: none;
+            text-shadow: 0 0 10px rgba(111, 216, 255, 0.6); transition: opacity 0.6s; }
+  .status::before { content: ""; display: inline-block; width: 36px; height: 1px; background: var(--holo); vertical-align: middle; margin-right: 10px; opacity: 0.7; }
+  .status .rec { display: inline-block; width: 7px; height: 7px; border-radius: 50%; background: #FF7A6E; margin-left: 10px; vertical-align: middle; box-shadow: 0 0 8px #FF7A6E; }
+  .subs { position: fixed; z-index: 6; left: 50%; bottom: clamp(28px, 5vh, 70px); transform: translateX(-50%);
+          width: min(46vw, 900px); text-align: center; pointer-events: none; transition: opacity 0.6s; }
+  .subs .you { color: #9FB6CC; font-size: clamp(14px, 1.6vh, 19px); margin-bottom: 8px; text-shadow: 0 2px 10px #000; }
+  .subs .him { font-weight: 600; font-size: clamp(18px, 2.1vh, 26px); line-height: 1.4; color: #fff;
+               text-shadow: 0 2px 14px #000, 0 0 3px #000; }
+  .hint { position: fixed; z-index: 6; right: 20px; bottom: 12px; color: var(--steel); font-size: 12px; opacity: 0.45; }
+
+  /* the control dock: mic switch + plan / back to the face. Above the plan frame. */
+  .dock { position: fixed; z-index: 7; left: clamp(20px, 2.4vw, 48px); bottom: clamp(20px, 3vh, 40px);
+          display: flex; gap: 12px; }
+  .btn { pointer-events: auto; display: inline-flex; align-items: center; gap: 10px; height: 48px; padding: 0 18px 0 14px;
+         border-radius: 24px; border: 1px solid rgba(111, 216, 255, 0.35); background: rgba(6, 22, 42, 0.72);
+         color: var(--ice); font: 500 15px var(--text); cursor: pointer; backdrop-filter: blur(6px);
+         transition: background 0.2s, border-color 0.2s, color 0.2s, box-shadow 0.2s; }
+  .btn:hover { border-color: var(--holo); box-shadow: 0 0 18px rgba(111, 216, 255, 0.25); }
+  .btn:focus-visible { outline: 2px solid var(--holo); outline-offset: 3px; }
+  .btn svg { width: 22px; height: 22px; flex: none; }
+  .btn .off { display: none; }
+  .btn.muted { border-color: #FF7A6E; color: #FFD2CC; background: rgba(60, 14, 18, 0.75); box-shadow: 0 0 18px rgba(255, 122, 110, 0.3); }
+  .btn.muted .on { display: none; }
+  .btn.muted .off { display: inline; }
+  .nogl { position: fixed; inset: 0; display: none; align-items: center; justify-content: center; color: var(--steel); }
+  @media (prefers-reduced-motion: reduce) { #plan { transition-duration: 0.01s; } }
+</style>
+</head>
+<body>
+<canvas id="fx" aria-hidden="true"></canvas>
+<canvas id="gl" aria-hidden="true"></canvas>
+<div class="ui">
+  <header>
+    <div><h1 class="day" id="day"></h1><p class="greet" id="greet"></p></div>
+    <div class="now"><div class="hm" id="hm"></div><div class="weather" id="weather"></div></div>
+  </header>
+</div>
+<iframe id="plan" src="/plan.html" title="План дня" tabindex="-1"></iframe>
+<div class="status" id="status">STATUS: BOOTING</div>
+<div class="tele l" id="teleL" aria-hidden="true">
+  <h3>SYSTEM</h3>
+  <div class="row"><div class="k">CPU</div><div class="v" id="tCpu">—</div><canvas id="tCpuG"></canvas></div>
+  <div class="row"><div class="k">MEMORY</div><div class="v" id="tRam">—</div><div class="bar"><i id="tRamB"></i></div></div>
+  <div class="row"><div class="k">DISK C:</div><div class="v" id="tDisk">—</div><div class="bar"><i id="tDiskB"></i></div></div>
+  <div class="row"><div class="k">NETWORK</div><div class="v" id="tNet">—</div></div>
+  <div class="row"><div class="k">UPTIME</div><div class="v" id="tUp">—</div></div>
+</div>
+<div class="tele r" id="teleR" aria-hidden="true">
+  <h3>VOICE LINK</h3>
+  <div class="row"><div class="k">SIGNAL</div><canvas id="tVoice"></canvas></div>
+  <div class="row"><div class="k">MODE</div><div class="v" id="tMode">—</div></div>
+  <div class="row"><div class="k">MICROPHONE</div><div class="v" id="tMic">—</div></div>
+  <div class="row"><div class="k">EXCHANGES</div><div class="v" id="tLines">0</div></div>
+  <div class="row"><div class="k">PROCESSES</div><div class="v" id="tProcs">—</div></div>
+</div>
+<div class="subs" id="subs"></div>
+<div class="hint">Esc — назад к лицу / закрыть</div>
+<div class="dock">
+  <button class="btn" id="micBtn" type="button" aria-pressed="false" title="Выключить микрофон">
+    <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.8" stroke-linecap="round" aria-hidden="true">
+      <rect x="9" y="3" width="6" height="11" rx="3"/><path d="M5.5 11a6.5 6.5 0 0 0 13 0M12 17.5V21"/>
+      <path class="off" d="M4 4l16 16"/>
+    </svg>
+    <span class="on">Микрофон</span><span class="off">Микрофон выключен</span>
+  </button>
+  <button class="btn" id="planBtn" type="button">
+    <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.8" stroke-linecap="round" aria-hidden="true">
+      <path id="planIcon" d="M4 6h16M4 12h16M4 18h10"/>
+    </svg>
+    <span id="planLabel">План дня</span>
+  </button>
+</div>
+<div class="nogl" id="nogl">Видеокарта не дала WebGL — лицо не нарисовать, план дня работает.</div>
+
+<script>
+"use strict";
+const $ = (id) => document.getElementById(id);
+// ?mode=face: Jarvis alone (the desktop-wallpaper on the main monitor) -- the plan lives on its own
+// wallpaper there, so this page never folds into it
+const FACE_ONLY = new URLSearchParams(location.search).get("mode") === "face";
+if (FACE_ONLY) document.documentElement.classList.add("face-only");
+const reduce = matchMedia("(prefers-reduced-motion: reduce)").matches;
+const pad = (n) => String(n).padStart(2, "0");
+const esc = (s) => String(s).replace(/[&<>"]/g, (c) => ({ "&": "&amp;", "<": "&lt;", ">": "&gt;", '"': "&quot;" }[c]));
+const WEEK = ["воскресенье", "понедельник", "вторник", "среда", "четверг", "пятница", "суббота"];
+const MON = ["января", "февраля", "марта", "апреля", "мая", "июня", "июля", "августа", "сентября", "октября", "ноября", "декабря"];
+const minsOf = (d) => d.getHours() * 60 + d.getMinutes() + d.getSeconds() / 60;
+const ss = (x) => { x = Math.min(1, Math.max(0, x)); return x * x * (3 - 2 * x); };
+
+/* =============================== day plan =============================== */
+let DATA = { events: [], todos: [], reminders: [], weather: null, name: "", city: "" };
+async function loadData() {
+  try { DATA = await (await fetch("/data.json", { cache: "no-store" })).json(); renderPlan(); } catch (e) { /* server restarting */ }
+}
+function span(min) {
+  const m = Math.max(0, Math.round(min));
+  if (m < 60) return `через ${m} мин`;
+  const h = Math.floor(m / 60), r = m % 60;
+  return r ? `через ${h} ч ${r} мин` : `через ${h} ч`;
+}
+function countdown(sec) {
+  sec = Math.max(0, Math.round(sec));
+  const h = Math.floor(sec / 3600), m = Math.floor((sec % 3600) / 60), s = sec % 60;
+  return h ? `${h}:${pad(m)}:${pad(s)}` : `${pad(m)}:${pad(s)}`;
+}
+function renderPlan() {
+  const now = new Date(), nowMin = minsOf(now), hour = now.getHours();
+  const part = hour < 5 ? "Доброй ночи" : hour < 12 ? "Доброе утро" : hour < 18 ? "Добрый день" : "Добрый вечер";
+  const wd = WEEK[now.getDay()];
+  $("day").innerHTML = `<b>${wd[0].toUpperCase() + wd.slice(1)}</b>, ${now.getDate()} ${MON[now.getMonth()]}`;
+  $("greet").textContent = DATA.name ? `${part}, ${DATA.name}.` : `${part}.`;
+  const w = DATA.weather;
+  $("weather").innerHTML = w ? `<span class="t">${Math.round(w.temp)}°</span> ${esc(DATA.city || "")}, ${esc(w.condition)}${w.min != null ? `, днём ${Math.round(w.min)}…${Math.round(w.max)}°` : ""}` : "";
+
+}
+function clockTick() {
+  const n = new Date();
+  $("hm").innerHTML = `${pad(n.getHours())}:${pad(n.getMinutes())}<span class="s">${pad(n.getSeconds())}</span>`;
+}
+
+/* ============================== PC telemetry ============================== */
+const TELE = { cpu: [], voice: [] };
+function fmtRate(b) { return b > 1048576 ? (b / 1048576).toFixed(1) + " MB/s" : Math.round(b / 1024) + " KB/s"; }
+async function pollSys() {
+  try {
+    const d = await (await fetch("/sys.json", { cache: "no-store" })).json();
+    TELE.cpu.push(d.cpu); if (TELE.cpu.length > 90) TELE.cpu.shift();
+    $("tCpu").innerHTML = `${Math.round(d.cpu)}<small>% · ${d.cores} CORES</small>`;
+    $("tRam").innerHTML = `${d.ram_used}<small>/ ${d.ram_total} GB</small>`;
+    $("tRamB").style.width = d.ram + "%"; $("tRamB").parentElement.classList.toggle("hot", d.ram > 85);
+    $("tDisk").innerHTML = `${Math.round(d.disk)}<small>% · ${d.disk_free} GB FREE</small>`;
+    $("tDiskB").style.width = d.disk + "%"; $("tDiskB").parentElement.classList.toggle("hot", d.disk > 90);
+    $("tNet").innerHTML = `↓ ${fmtRate(d.rx)}<small>↑ ${fmtRate(d.tx)}</small>`;
+    const h = Math.floor(d.uptime / 3600), m = Math.floor((d.uptime % 3600) / 60);
+    $("tUp").innerHTML = `${h}<small>H</small> ${pad(m)}<small>MIN</small>`;
+    $("tProcs").textContent = d.procs;
+  } catch (e) { /* server restarting */ }
+}
+function fitCanvas(c) {
+  const r = c.getBoundingClientRect(), dpr = Math.min(2, devicePixelRatio || 1);
+  if (c.width !== Math.round(r.width * dpr)) { c.width = Math.round(r.width * dpr); c.height = Math.round(r.height * dpr); }
+  return dpr;
+}
+function sparkline(canvas, data, max, color, fill) {
+  const dpr = fitCanvas(canvas);
+  const g = canvas.getContext("2d"), w = canvas.width, h = canvas.height;
+  g.clearRect(0, 0, w, h);
+  g.strokeStyle = "rgba(111, 216, 255, 0.15)"; g.lineWidth = 1;
+  for (let i = 1; i < 4; i++) { g.beginPath(); g.moveTo(0, (h * i) / 4); g.lineTo(w, (h * i) / 4); g.stroke(); }
+  if (data.length < 2) return;
+  g.beginPath();
+  data.forEach((v, i) => { const x = (i / (data.length - 1)) * w, y = h - (Math.min(v, max) / max) * (h - 2) - 1; if (i) g.lineTo(x, y); else g.moveTo(x, y); });
+  g.strokeStyle = color; g.lineWidth = 1.5 * dpr; g.shadowColor = color; g.shadowBlur = 6; g.stroke(); g.shadowBlur = 0;
+  if (fill) { g.lineTo(w, h); g.lineTo(0, h); g.closePath(); g.fillStyle = fill; g.fill(); }
+}
+function renderTele() {
+  sparkline($("tCpuG"), TELE.cpu, 100, "#6FD8FF", "rgba(111, 216, 255, 0.10)");
+  TELE.voice.push(ST.energy); if (TELE.voice.length > 240) TELE.voice.shift();
+  // the voice trace: mirrored around a centre line like an oscilloscope
+  const c = $("tVoice"), dpr = fitCanvas(c);
+  const g = c.getContext("2d"), w = c.width, h = c.height;
+  g.clearRect(0, 0, w, h);
+  g.strokeStyle = "rgba(111, 216, 255, 0.18)"; g.beginPath(); g.moveTo(0, h / 2); g.lineTo(w, h / 2); g.stroke();
+  g.fillStyle = LIVE.muted ? "rgba(255, 122, 110, 0.8)" : "rgba(255, 190, 110, 0.85)";
+  for (let i = 0; i < TELE.voice.length; i += 2) {
+    const v = TELE.voice[i], x = w - ((TELE.voice.length - i) / 240) * w, a = Math.max(1, v * (h / 2 - 2));
+    g.fillRect(x, h / 2 - a, Math.max(1, dpr), a * 2);
+  }
+  $("tMode").textContent = ({ thinking: "THINKING", speaking: "SPEAKING", sleeping: "STANDBY" }[LIVE.status] || "LISTENING");
+  $("tMic").textContent = LIVE.muted ? "OFF" : "ON";
+  $("tMic").style.color = LIVE.muted ? "#FF7A6E" : "";
+  $("tLines").textContent = LIVE.lines.length;
+}
+
+/* ============================ live link to Jarvis ============================ */
+const LIVE = { status: "booting", level: 0, sib: 0, watching: false, plan: false, muted: false, lines: [], linesAt: 0, connected: false };
+// a button press wins over the stream for a moment, until the server's state file catches up
+const OVERRIDE = { plan: 0, mic: 0 };
+function connect() {
+  let es;
+  try { es = new EventSource("/events"); } catch (e) { return; }
+  es.onmessage = (ev) => {
+    const m = JSON.parse(ev.data);
+    LIVE.connected = true;
+    LIVE.status = m.s === "idle" ? "listening" : m.s;
+    LIVE.level = m.l; LIVE.sib = m.b; LIVE.watching = m.w;
+    const t = performance.now();
+    if (t > OVERRIDE.plan) LIVE.plan = FACE_ONLY ? false : !!m.p;
+    if (t > OVERRIDE.mic) LIVE.muted = !!m.m;
+    renderDock();
+    if (m.lines) { LIVE.lines = m.lines; LIVE.linesAt = performance.now(); renderSubs(); }
+  };
+  es.onerror = () => { LIVE.connected = false; };
+}
+function renderSubs() {
+  const lines = LIVE.lines, last = lines[lines.length - 1];
+  if (!last) { $("subs").innerHTML = ""; return; }
+  const prev = lines[lines.length - 2];
+  let html = "";
+  if (last.role === "user") html = `<div class="you">${esc(last.text)}</div>`;
+  else {
+    if (prev && prev.role === "user") html += `<div class="you">${esc(prev.text)}</div>`;
+    const t = last.text.length > 200 ? "…" + last.text.slice(-200) : last.text;
+    html += `<div class="him">${esc(t)}</div>`;
+  }
+  $("subs").innerHTML = html;
+  $("subs").style.opacity = 1;
+}
+// "открой план": the bust flies back into the source orb, then the plan page opens out of it;
+// "закрой план": the page folds back into the orb and the orbs fly out to rebuild the bust.
+const PLAN = { open: false, closingUntil: 0 };
+async function control(body) {
+  try {
+    await fetch("/control", { method: "POST", headers: { "Content-Type": "application/json", "X-Jarvis": "1" },
+                              body: JSON.stringify(body) });
+  } catch (e) { /* the server is restarting; the stream will resync */ }
+}
+function setPlan(on) { LIVE.plan = on; OVERRIDE.plan = performance.now() + 1200; renderDock(); control({ plan: on }); }
+function setMic(on) { LIVE.muted = !on; OVERRIDE.mic = performance.now() + 1200; renderDock(); control({ mic: on }); }
+function renderDock() {
+  const mic = $("micBtn");
+  mic.classList.toggle("muted", LIVE.muted);
+  mic.setAttribute("aria-pressed", String(LIVE.muted));
+  mic.title = LIVE.muted ? "Включить микрофон" : "Выключить микрофон";
+  $("planLabel").textContent = LIVE.plan ? "Назад к лицу" : "План дня";
+  $("planIcon").setAttribute("d", LIVE.plan ? "M15 5l-7 7 7 7" : "M4 6h16M4 12h16M4 18h10");
+}
+// Only a real mouse/touch press counts (e.detail > 0): a button keeps focus after a click, and
+// a stray Space/Enter while this full-screen window is active must not silently mute Jarvis.
+for (const [id, act] of [["micBtn", () => setMic(LIVE.muted)], ["planBtn", () => setPlan(!LIVE.plan)]]) {
+  const b = $(id);
+  b.addEventListener("mousedown", (e) => e.preventDefault());       // don't take keyboard focus
+  b.addEventListener("click", (e) => { b.blur(); if (e.detail > 0) act(); });
+}
+
+function openPlan() {
+  PLAN.open = true;
+  const f = $("plan");
+  f.style.setProperty("--ox", ORB[0] + "px"); f.style.setProperty("--oy", ORB[1] + "px");
+  try { f.contentWindow.postMessage("replay", "*"); } catch (e) { /* not loaded yet */ }
+  document.body.classList.add("plan");
+}
+function closePlan(now) {
+  PLAN.open = false;
+  PLAN.closingUntil = now + 1100;
+  document.body.classList.remove("plan");
+}
+
+/* ======================= the bust: a sculpted signed-distance field ======================= */
+// Model units, y grows DOWN: crown y≈-1.36, chin ≈1.25, shoulders ≈2.2, the view cuts at ≈3.3.
+// z < 0 faces the viewer. The surface is sliced horizontally into contour rings (the reference look);
+// every ring follows the real sculpted shape, so the nose, lips, ears, collarbones show in the lines.
+const hypot3 = (x, y, z) => Math.sqrt(x * x + y * y + z * z);
+function sdEll(px, py, pz, cx, cy, cz, rx, ry, rz) {
+  const x = (px - cx) / rx, y = (py - cy) / ry, z = (pz - cz) / rz;
+  const k0 = hypot3(x, y, z), k1 = hypot3(x / rx, y / ry, z / rz);
+  return k1 === 0 ? -Math.min(rx, ry, rz) : k0 * (k0 - 1) / k1;
+}
+function sdCap(px, py, pz, ax, ay, az, bx, by, bz, r) {
+  const pax = px - ax, pay = py - ay, paz = pz - az, bax = bx - ax, bay = by - ay, baz = bz - az;
+  const h = Math.min(1, Math.max(0, (pax * bax + pay * bay + paz * baz) / (bax * bax + bay * bay + baz * baz)));
+  return hypot3(pax - bax * h, pay - bay * h, paz - baz * h) - r;
+}
+function smin(a, b, k) { const h = Math.max(k - Math.abs(a - b), 0) / k; return Math.min(a, b) - h * h * k * 0.25; }
+function ssub(d, cut, k) { const h = Math.min(1, Math.max(0, 0.5 - 0.5 * (d + cut) / k)); return d + (-cut - d) * h + k * h * (1 - h); }
+function sdf(px, py, pz) {
+  const ax = Math.abs(px);
+  let d = sdEll(px, py, pz, 0, -0.40, 0.10, 0.84, 0.97, 1.00);                // cranium
+  d = smin(d, sdEll(px, py, pz, 0, 0.30, -0.12, 0.70, 0.92, 0.80), 0.30);    // face mass
+  d = smin(d, sdEll(px, py, pz, 0, 0.78, -0.20, 0.52, 0.50, 0.60), 0.25);    // jaw
+  d = smin(d, sdEll(px, py, pz, 0, 1.06, -0.50, 0.27, 0.22, 0.24), 0.18);    // chin
+  d = smin(d, sdEll(ax, py, pz, 0.50, 0.02, -0.52, 0.22, 0.14, 0.22), 0.16); // cheekbones
+  d = smin(d, sdCap(ax, py, pz, 0.0, -0.30, -0.80, 0.42, -0.28, -0.70, 0.09), 0.14); // brow ridge
+  d = ssub(d, sdEll(ax, py, pz, 0.32, -0.12, -0.93, 0.18, 0.12, 0.16), 0.08); // eye sockets
+  d = smin(d, sdEll(ax, py, pz, 0.32, -0.12, -0.80, 0.12, 0.08, 0.10), 0.04); // eyes / lids
+  d = smin(d, sdCap(px, py, pz, 0, -0.18, -0.86, 0, 0.26, -1.06, 0.07), 0.10); // nose bridge
+  d = smin(d, sdEll(px, py, pz, 0, 0.30, -1.02, 0.11, 0.09, 0.10), 0.06);    // nose tip
+  d = smin(d, sdEll(ax, py, pz, 0.10, 0.36, -0.93, 0.08, 0.06, 0.07), 0.05); // nostril wings
+  d = smin(d, sdCap(ax, py, pz, 0, 0.55, -0.90, 0.21, 0.57, -0.80, 0.055), 0.06); // upper lip
+  d = smin(d, sdCap(ax, py, pz, 0, 0.68, -0.88, 0.17, 0.66, -0.80, 0.06), 0.06);  // lower lip
+  d = ssub(d, sdCap(ax, py, pz, 0, 0.615, -0.98, 0.22, 0.61, -0.86, 0.018), 0.02); // mouth line
+  d = smin(d, sdEll(ax, py, pz, 0.86, -0.05, 0.10, 0.10, 0.30, 0.18), 0.08); // ears
+  d = smin(d, sdCap(px, py, pz, 0, 0.85, 0.14, 0, 1.95, 0.16, 0.43), 0.22);  // neck
+  d = smin(d, sdCap(ax, py, pz, 0.52, 0.80, 0.22, 0.13, 1.80, -0.30, 0.10), 0.12); // neck muscles (ear -> sternum)
+  d = smin(d, sdEll(px, py, pz, 0, 1.36, -0.32, 0.09, 0.09, 0.08), 0.06);    // adam's apple
+  d = smin(d, sdCap(ax, py, pz, 0.22, 1.32, 0.26, 1.32, 1.92, 0.16, 0.34), 0.32); // trapezius: thick, high slope
+  d = smin(d, sdEll(ax, py, pz, 1.64, 2.12, 0.08, 0.60, 0.58, 0.58), 0.20);  // deltoids: big round caps
+  d = smin(d, sdEll(ax, py, pz, 1.42, 2.02, -0.24, 0.32, 0.30, 0.28), 0.14); // front deltoid head
+  d = smin(d, sdCap(ax, py, pz, 0.12, 1.97, -0.34, 1.24, 1.84, -0.18, 0.075), 0.10); // collarbones
+  d = smin(d, sdEll(px, py, pz, 0, 2.95, 0.12, 1.64, 1.15, 0.74), 0.40);     // torso
+  d = smin(d, sdEll(ax, py, pz, 0.64, 2.46, -0.42, 0.72, 0.42, 0.34), 0.20); // pectorals: heavy slabs
+  d = ssub(d, sdCap(px, py, pz, 0, 2.22, -0.84, 0, 2.95, -0.84, 0.06), 0.09);  // the groove between them
+  d = ssub(d, sdCap(ax, py, pz, 1.12, 1.98, -0.50, 1.30, 2.70, -0.40, 0.05), 0.08); // deltoid / chest line
+  d = smin(d, sdCap(ax, py, pz, 1.84, 2.30, 0.08, 1.96, 3.60, 0.12, 0.45), 0.16); // upper arms
+  d = smin(d, sdEll(ax, py, pz, 1.90, 2.86, -0.24, 0.32, 0.48, 0.30), 0.14); // biceps
+  return d;
+}
+const RC = 0.12;   // slices are ray-cast around the axis x=0, z=RC
+// outermost surface point on the ray from the axis at height y, angle th (0 = facing the viewer)
+function surfaceAt(y, th) {
+  const dx = Math.sin(th), dz = -Math.cos(th);
+  let r = y < 0.9 ? 1.5 : 3.2, prev = r;
+  if (sdf(dx * r, y, RC + dz * r) < 0) return null;
+  for (let i = 0; i < 90 && r > 0; i++) {
+    const d = sdf(dx * r, y, RC + dz * r);
+    if (d < 0) {                          // crossed: bisect between r and prev
+      let lo = r, hi = prev;
+      for (let j = 0; j < 10; j++) { const m = (lo + hi) / 2; if (sdf(dx * m, y, RC + dz * m) < 0) lo = m; else hi = m; }
+      return [dx * hi, y, RC + dz * hi];
+    }
+    prev = r;
+    r -= Math.max(d * 0.8, 0.004);
+  }
+  return null;
+}
+function normalAt(x, y, z) {
+  const e = 0.004;
+  const nx = sdf(x + e, y, z) - sdf(x - e, y, z), ny = sdf(x, y + e, z) - sdf(x, y - e, z), nz = sdf(x, y, z + e) - sdf(x, y, z - e);
+  const l = hypot3(nx, ny, nz) || 1;
+  return [nx / l, ny / l, nz / l];
+}
+
+// cheap 2D value noise for the mountains
+function hash2(x, y) { const s = Math.sin(x * 127.1 + y * 311.7) * 43758.5453; return s - Math.floor(s); }
+function noise2(x, y) {
+  const xi = Math.floor(x), yi = Math.floor(y), xf = x - xi, yf = y - yi;
+  const u = xf * xf * (3 - 2 * xf), v = yf * yf * (3 - 2 * yf);
+  const a = hash2(xi, yi), b = hash2(xi + 1, yi), c = hash2(xi, yi + 1), d = hash2(xi + 1, yi + 1);
+  return a + (b - a) * u + (c - a) * v + (a - b - c + d) * u * v;
+}
+function ridge(x, z) {       // ridged multifractal: sharp crests, wide valleys (0..~1)
+  let h = 0, a = 0.55, f = 0.07, w = 1;
+  for (let i = 0; i < 6; i++) {
+    let n = 1 - Math.abs(noise2(x * f + i * 7.1, z * f * 0.6 + i * 3.3) * 2 - 1);
+    n = n * n * w; w = Math.min(1, n * 1.8);
+    h += n * a; a *= 0.5; f *= 2.1;
+  }
+  return h;
+}
+
+const K_SURF = 0, K_NERVE = 3, K_DUST = 4, K_MTN = 5, K_FLY = 6;
+function buildModel(prm) {
+  let rnd = 7; const rand = () => ((rnd = (rnd * 16807) % 2147483647) / 2147483647);
+  const P = [], N = [], I = [];
+  const add = (p, n, kind, base) => { P.push(p[0], p[1], p[2]); N.push(n[0], n[1], n[2]); I.push(kind, 0, rand(), base); };
+
+  // contour rings over the whole bust
+  const NA = 720;
+  for (let y0 = -1.36; y0 < 3.3; y0 += prm.ring) {
+    const ring = [];
+    for (let i = 0; i < NA; i++) {
+      const p = surfaceAt(y0, (i / NA) * Math.PI * 2);
+      if (p) ring.push(p);
+    }
+    if (ring.length < 8) continue;
+    const fade = 1 - ss((y0 - 2.55) / 0.7);
+    let acc = 0;
+    for (let i = 0; i < ring.length; i++) {
+      const a = ring[i], b = ring[(i + 1) % ring.length];
+      const seg = Math.hypot(b[0] - a[0], b[2] - a[2]);
+      const step = a[2] < RC - 0.05 ? prm.front : prm.back;   // dense beads in front, sparser behind
+      acc += seg;
+      while (acc >= step) {
+        acc -= step;
+        const t = seg > 0 ? 1 - acc / seg : 0;
+        const p = [a[0] + (b[0] - a[0]) * t, y0, a[2] + (b[2] - a[2]) * t];
+        add(p, normalAt(p[0], p[1], p[2]), K_SURF, fade);
+      }
+    }
+  }
+  const nSurf = P.length / 3;
+
+  // golden nerves: branching strands from under the jaw down the throat into the chest
+  const strand = (th, y, dth, depth, life) => {
+    for (let i = 0; i < life && y < 2.55; i++) {
+      const p = surfaceAt(y, th);
+      if (p) add([p[0], p[1], p[2] - 0.012], [Math.sin(th), 0, -Math.cos(th)], K_NERVE, 1.25 - depth * 0.3);
+      y += 0.008; th += dth + (rand() - 0.5) * 0.008; dth += (rand() - 0.5) * 0.0008; dth *= 0.97;
+      if (depth < 2 && rand() < 0.014) strand(th, y, dth + (rand() - 0.5) * 0.02, depth + 1, life * 0.45);
+    }
+  };
+  for (let k = 0; k < 7; k++) strand((rand() - 0.5) * 0.7, 1.12 + rand() * 0.1, (rand() - 0.5) * 0.003, 0, 150);
+
+  // sparks around the crown
+  for (let k = 0; k < 700; k++) {
+    const a = rand() * 2 * Math.PI, el = -1.1 + rand() * 1.4, rr = 1.1 + rand() * 0.6;
+    add([rr * Math.cos(a) * Math.cos(el), -Math.abs(Math.sin(el)) * rr * 1.1 - 0.2, rr * Math.sin(a) * Math.cos(el)], [0, 0, -1], K_DUST, 0.2 + rand() * 0.5);
+  }
+  const nBust = P.length / 3;
+
+  // mountains: ridgelines at receding depths (aPos = x, height, depth)
+  const ROWS = 34;
+  for (let row = 0; row < ROWS; row++) {
+    const z = 3.0 + row * 0.55, k = 6 / (6 + z);
+    const half = 4.4 / k, step = 0.011 / k;
+    const nearness = 1 - row / ROWS;
+    const amp = 0.4 + 11.0 * ss((z - 3.5) / 12);          // foothills in front, high ranges behind
+    for (let x = -half; x <= half; x += step) {
+      const r = ridge(x + 40, z * 2.3);
+      const h = r * amp;
+      const crest = Math.min(1, r * 1.3);
+      add([x, h, z], [0, 0, -1], K_MTN, (0.22 + 0.6 * Math.pow(nearness, 1.1)) * (0.35 + 1.3 * crest * crest));
+    }
+  }
+
+  // emission order for the assembly: orbs leave the source, sweep up the right side,
+  // over the crown and down the left, shoulders last
+  for (let i = 0; i < nBust; i++) {
+    const x = P[i * 3], y = P[i * 3 + 1], z = P[i * 3 + 2];
+    let ang = Math.atan2(-(y - 0.05), x) * 180 / Math.PI;               // screen angle around the head
+    if (ang < -40) ang += 360;
+    I[i * 4 + 1] = Math.min(1, Math.max(0, (ang + 40) / 290));          // right -> crown -> left
+  }
+  // extra particles that only exist in flight: they ride the stream with the real ones (twice
+  // over), making it dense, and fade out as they reach the surface
+  const nFly0 = P.length / 3;
+  for (let rep = 0; rep < prm.fly; rep++) {
+    for (let i = 0; i < nSurf; i++) {
+      P.push(P[i * 3], P[i * 3 + 1], P[i * 3 + 2]); N.push(N[i * 3], N[i * 3 + 1], N[i * 3 + 2]);
+      I.push(K_FLY, I[i * 4 + 1], rand(), 1);
+    }
+  }
+  const n = P.length / 3;
+  return { P: new Float32Array(P), N: new Float32Array(N), I: new Float32Array(I), n, nSurf, nBust, nFly0 };
+}
+
+const VS = `
+attribute vec3 aPos; attribute vec3 aNorm; attribute vec4 aInfo;
+uniform vec2 uRes; uniform vec2 uC; uniform float uS; uniform vec2 uOrb; uniform float uDpr; uniform float uHor;
+uniform float uT, uE, uSib, uTh, uYaw, uPitch, uRoll, uAsmT, uMode, uPass, uScene, uBead;
+varying vec3 vCol; varying float vA; varying float vGlow; varying float vPx;
+const vec3 CYAN = vec3(0.10, 0.52, 1.00);
+const vec3 RIM = vec3(0.55, 0.92, 1.00);
+const vec3 ORANGE = vec3(1.00, 0.40, 0.06);
+const vec3 YELLOW = vec3(1.00, 0.88, 0.45);
+const vec3 GOLD = vec3(1.00, 0.70, 0.22);
+const vec3 ICE = vec3(0.80, 0.95, 1.00);
+const vec3 PIVOT = vec3(0.0, 0.95, 0.15);
+const vec3 LIGHT = vec3(-0.75, -0.55, -0.45);   // raking from the upper left: muscles cast relief
+mat3 rot(float y, float p, float r) {
+  float cy = cos(y), sy = sin(y), cp = cos(p), sp = sin(p), cr = cos(r), sr = sin(r);
+  mat3 ry = mat3(cy, 0.0, -sy, 0.0, 1.0, 0.0, sy, 0.0, cy);
+  mat3 rx = mat3(1.0, 0.0, 0.0, 0.0, cp, sp, 0.0, -sp, cp);
+  mat3 rz = mat3(cr, sr, 0.0, -sr, cr, 0.0, 0.0, 0.0, 1.0);
+  return ry * rx * rz;
+}
+float ease(float x) { x = clamp(x, 0.0, 1.0); return x * x * (3.0 - 2.0 * x); }
+void main() {
+  float kind = aInfo.x, order = aInfo.y, seed = aInfo.z, base = aInfo.w;
+  vGlow = uPass;
+
+  if (kind == 5.0) {        // mountains: their own ground-plane perspective, never rotated
+    float z = aPos.z, k = 6.0 / (6.0 + z);
+    float sway = uYaw * 0.35 * uS * k;
+    vec2 scr = vec2(uC.x + aPos.x * uS * k - sway, uHor + 1.55 * uS * k - aPos.y * uS * k);
+    float tw = 0.85 + 0.15 * sin(uT * 1.5 + seed * 40.0);
+    vA = base * tw * uScene * (uPass > 0.5 ? 0.22 : 1.3);
+    vCol = mix(vec3(0.10, 0.28, 0.75), vec3(0.35, 0.80, 1.0), clamp(base * 1.4, 0.0, 1.0));
+    gl_PointSize = (uPass > 0.5 ? 7.0 : 2.6) * max(0.75, k * 1.6) * uDpr;
+    vPx = gl_PointSize;
+    gl_Position = vec4(scr.x / uRes.x * 2.0 - 1.0, 1.0 - scr.y / uRes.y * 2.0, 0.2 + z / 40.0, 1.0);
+    return;
+  }
+
+  vec3 p = aPos, n = aNorm;
+  float rig = 1.0 - 0.85 * smoothstep(0.9, 1.9, p.y);
+  if (kind == 4.0) {                       // sparks drift upward and fade
+    float d = mod(uT * 0.06 * (0.5 + seed) + seed * 3.0, 0.5);
+    p.y -= d; p.x += sin(uT * 0.4 + seed * 20.0) * 0.03;
+    base *= 1.0 - d / 0.5;
+    rig = 1.0;
+  }
+  float face = step(p.z, -0.25) * step(p.y, 1.0) * step(kind, 0.5);
+  float dc = length(p.xy - vec2(0.0, 0.10));
+  // the voice: the face's contour rings ripple outward from the core
+  float faceW = (1.0 - smoothstep(-0.45, -0.08, p.z)) * (1.0 - smoothstep(0.7, 1.05, p.y)) * step(kind, 0.5);
+  p += n * faceW * uE * (0.018 + 0.01 * uSib) * sin(dc * 12.0 - uT * 9.0) * exp(-dc * 1.6);
+  if (p.y < 1.9) p.y -= 0.010 * sin(uT * 1.4);
+
+  mat3 R = rot(uYaw * rig, uPitch * rig, uRoll * rig);
+  vec3 q = R * (p - PIVOT) + PIVOT;
+  vec3 nn = R * n;
+  float k = 6.0 / (6.0 + q.z);
+  vec2 scr = uC + q.xy * uS * k;
+
+  // light: a burning silhouette (fresnel) + a key light from the upper left; the far side barely there
+  float facing = -nn.z;
+  float fres = pow(1.0 - abs(nn.z), 2.6);
+  float diff = max(dot(nn, normalize(LIGHT)), 0.0);
+  float I = base * (0.24 + 0.7 * diff * clamp(facing + 0.3, 0.0, 1.0) + 1.5 * fres);
+  float farSide = smoothstep(0.08, 0.38, p.z - 0.12) * step(kind, 2.5);   // the back half of the body
+  I = mix(I, base * 0.07, farSide);
+  vec3 col = mix(CYAN, RIM, clamp(fres * 1.4 + diff * 0.25, 0.0, 1.0));
+
+  // the core inside the face: orange, burning yellow with the voice, white-cyan while thinking
+  float cw = exp(-p.x * p.x / 0.32) * exp(-pow(p.y - 0.12, 2.0) / 0.45) * face;
+  vec3 core = mix(ORANGE, YELLOW, clamp(pow(cw, 1.5) * (0.45 + 1.3 * uE), 0.0, 1.0));
+  core = mix(core, vec3(0.85, 0.97, 1.0), uTh * 0.8);
+  col = mix(col, core, clamp(cw * 2.4 * pow(1.0 - fres, 3.0), 0.0, 1.0));
+  I = I * (1.0 + cw * (0.5 + 0.8 * uE)) + cw * (0.35 + 1.1 * uE + 0.2 * uTh) * base;
+  float wave = 0.5 + 0.5 * sin(p.y * (5.0 + 4.0 * uTh) - uT * (1.2 + 6.0 * uTh) * 2.0);
+  I *= 0.84 + (0.2 + 0.6 * uTh) * wave * wave * wave;
+
+  if (kind == 3.0) { col = GOLD; I = base * (0.6 + 0.35 * sin(uT * 4.0 - p.y * 7.0 + seed * 6.0) + 0.6 * uE); }
+  if (kind == 4.0) { col = ICE; I = base * (0.5 + 0.5 * sin(uT * 3.0 * (0.5 + seed) + seed * 30.0)); }
+
+  float size = (kind == 4.0 ? 2.4 * uS / 250.0 : uBead) * k;
+
+  // Assembly as in the Reznikov reference: one dense stream leaves the source orb, sweeps up the
+  // right side, over the crown and down the left along a shared ribbon; each particle rides in
+  // it and peels off to its own place as the ribbon passes it, so the head draws itself right ->
+  // top -> left, shoulders last. Dissolve plays the same thing backwards into the orb.
+  float inFlight = 0.0, alive = 1.0, flash = 0.0;
+  if (uMode > 3.5 || (uMode > 1.5 && uMode < 2.5)) {
+    // Wake / sleep: a smooth nebula. Particles leave the source orb, drift round the head on a
+    // slowly turning vortex shell and settle onto their places along one cubic curve with a
+    // quintic ease (zero speed at both ends). The face fills in as a wave spreading out from its
+    // glowing core; hundreds of thousands of long, overlapping flights keep it continuous.
+    // Sleep (uMode 2) runs the same flow backwards, faster.
+    float T = uMode > 3.5 ? uAsmT : 5.0 * (1.0 - uAsmT / 3.2);
+    if (uPass > 0.5) T -= 0.06;                                   // the glow pass trails behind
+    vec2 home = scr;
+    vec2 H = uC + vec2(0.0, 0.1) * uS;
+    float j = fract(seed * 17.31);
+    float rad = length(home - H) / uS;                            // 0 at the core .. ~3 at the shoulders
+    float start = 0.35 + rad * 0.55 + j * 0.5;
+    float dur = 1.9 + 0.6 * fract(seed * 3.71);
+    float k = clamp((T - start) / dur, 0.0, 1.0);
+    float e = k * k * k * (k * (k * 6.0 - 15.0) + 10.0);          // smootherstep
+    float a0 = fract(seed * 7.13) * 6.2832 + uAsmT * 0.9;          // the turning vortex shell
+    vec2 c1 = H + vec2(cos(a0), sin(a0) * 0.62) * uS * (1.1 + 1.3 * fract(seed * 29.1));
+    vec2 c2 = home + normalize(home - H + vec2(0.001)) * uS * (0.35 + 0.4 * j);
+    float u = 1.0 - e;
+    scr = u * u * u * uOrb + 3.0 * u * u * e * c1 + 3.0 * u * e * e * c2 + e * e * e * home;
+    alive = smoothstep(0.0, 0.12, k) * step(0.0, T - start);
+    float settle = smoothstep(0.62, 1.0, e);
+    inFlight = alive * (1.0 - settle);
+    float mist = 0.20 + 0.20 * fract(seed * 2.39);
+    col = mix(vec3(0.62, 0.90, 1.0), col, settle);
+    I = mix(mist, I, settle) * alive;
+    size *= mix(0.75, 1.0, e);
+    if (uPass > 0.5) I *= 1.0 + 0.6 * inFlight;
+    if (kind == 6.0) I = mist * alive * (1.0 - smoothstep(0.7, 1.0, e));
+  } else if (uMode > 0.5) {  } else if (uMode > 0.5) {
+    float T = uMode < 1.5 ? uAsmT : (uMode < 2.5 ? 4.5 * (1.0 - uAsmT / 2.8) : -1.0);
+    if (uPass > 0.5) T -= 0.05;                               // the glow pass trails a step behind
+    vec2 H = uC + vec2(0.0, 0.05) * uS;                       // centre the ribbon loops around
+    float A0 = radians(-40.0), A1 = radians(250.0);
+    // where this particle leaves the ribbon: its own angle around the head
+    vec2 d = scr - H;
+    float ang = atan(-d.y, d.x);
+    if (ang < A0) ang += 6.2832;
+    float uExit = 0.14 + 0.86 * clamp((ang - A0) / (A1 - A0), 0.0, 1.0);
+    float launch = 0.25 + 2.1 * order + 0.25 * fract(seed * 17.3);
+    // position along the ribbon, 0..1 -- each particle a little ahead of / behind its neighbours,
+    // so the ring structure doesn't show as stripes inside the stream
+    float s = (T - launch) / 1.45 + (fract(seed * 3.13) - 0.5) * 0.07;
+    // the ribbon: a short rise out of the orb, then a wide arc around the head
+    float stray = step(0.86, fract(seed * 5.71));             // ~14% drift wide of the stream: sparks
+    float wob = (fract(seed * 7.31) - 0.5) + (fract(seed * 3.77) - 0.5) * 0.7;
+    wob *= 1.0 + stray * 1.8;
+    vec2 P0 = H + vec2(cos(A0), -sin(A0)) * uS * 1.95;
+    vec2 rib;
+    float su = min(s, uExit);
+    if (su < 0.14) {
+      float e2 = su / 0.14;
+      vec2 ctrl = vec2(uOrb.x + uS * 1.2, uOrb.y - uS * 0.2);
+      rib = mix(mix(uOrb, ctrl, e2), mix(ctrl, P0, e2), e2);
+    } else {
+      float a = mix(A0, A1, (su - 0.14) / 0.86);
+      float rr = uS * mix(1.95, 1.55, (su - 0.14) / 0.86);
+      rib = H + vec2(cos(a), -sin(a)) * rr;
+    }
+    // ribbon thickness: particles spread across it, the leading edge thinner
+    vec2 nrm = normalize(rib - H + vec2(0.001));
+    float swirl = sin(su * 38.0 + seed * 40.0 + uAsmT * 3.0) * 0.04 * uS;
+    rib += nrm * (wob * uS * 0.24 * (0.3 + 0.7 * smoothstep(0.0, 0.35, su)) + swirl)
+         + vec2(-nrm.y, nrm.x) * (fract(seed * 9.17) - 0.5) * uS * 0.16;
+    float land = clamp((s - uExit) / 0.22, 0.0, 1.0);        // peel off to the target
+    float le = land * land * (3.0 - 2.0 * land);
+    alive = step(0.0, s);
+    inFlight = alive * (1.0 - step(1.0, land));
+    flash = uMode < 1.5 ? exp(-max(s - uExit - 0.22, 0.0) * 9.0) * step(uExit + 0.22, s) : 0.0;
+    scr = mix(rib, scr, le);
+    col = mix(col, vec3(0.62, 0.90, 1.0), inFlight);
+    float glowIn = (0.34 + 0.46 * fract(seed * 2.39)) * (1.0 - 0.5 * stray);
+    I = (mix(I, glowIn, inFlight) + flash * 0.6) * alive;
+    size *= 1.0 + 0.15 * inFlight + flash * 0.4;
+    if (kind == 6.0) { I = glowIn * inFlight * (1.0 - le); }
+  }
+
+  vA = I;
+  vCol = col;
+  if (uPass > 1.5) {                     // occluder: a fat invisible point that hides the mountains behind
+    gl_PointSize = 16.0 * k * uS / 250.0 * uDpr;
+    vA = 0.0;
+  } else if (uPass > 0.5) {              // glow only where it belongs: the neon silhouette and the nerves
+    size *= 3.0 + 2.0 * fres;
+    vA *= 0.10 * fres * fres * step(kind, 2.5) + 0.05 * step(2.5, kind) * step(kind, 3.5) + 0.03 * inFlight;
+    gl_PointSize = size * uDpr;
+  } else {
+    gl_PointSize = size * uDpr;
+  }
+  if (uPass < 1.5 && vA < 0.004) gl_PointSize = 0.0;             // nothing to draw: skip the fill
+  vPx = gl_PointSize;
+  gl_Position = vec4(scr.x / uRes.x * 2.0 - 1.0, 1.0 - scr.y / uRes.y * 2.0, q.z / 40.0, 1.0);
+}`;
+const FS = `
+precision mediump float;
+varying vec3 vCol; varying float vA; varying float vGlow; varying float vPx;
+void main() {
+  float r = length(gl_PointCoord - 0.5) * 2.0;
+  if (r > 1.0) discard;
+  float a;
+  if (vGlow > 0.5) a = exp(-r * r * 3.0);
+  else {
+    // a crisp glowing point: one device pixel of anti-aliasing at the edge, hot centre
+    float aa = 2.0 / max(vPx, 1.0);
+    float disc = 1.0 - smoothstep(1.0 - aa, 1.0, r);
+    a = disc * (0.35 + 0.8 * exp(-r * r * 3.0));
+    gl_FragColor = vec4(vCol * a * vA, a * vA);
+    return;
+  }
+  a *= vA;
+  gl_FragColor = vec4(vCol * a, a);
+}`;
+
+const glc = $("gl"), fx = $("fx"), cx = fx.getContext("2d");
+let gl = null, prog = null, M = null, U = {}, W = 0, H = 0, DPR = 1, S = 0, C = [0, 0], ORB = [0, 0], HOR = 0;
+
+function layout() {
+  W = innerWidth; H = innerHeight;
+  // sharp orbs want >= 2x, but cap the canvas near 4K worth of pixels (a 4K wallpaper at 2x
+  // would be 33 Mpx per frame)
+  DPR = Math.min(3, Math.max(2, devicePixelRatio || 1), Math.sqrt(9.0e6 / (W * H)));
+  for (const c of [glc, fx]) { c.width = Math.round(W * DPR); c.height = Math.round(H * DPR); }
+  cx.setTransform(DPR, 0, 0, DPR, 0, 0);
+  S = Math.min(H * 0.92 / 4.4, W * 0.5 / 3.9);
+  C = [W / 2, H * 0.07 + 1.5 * S];
+  ORB = [W / 2, C[1] + 2.45 * S];
+  HOR = H * 0.50;
+  if (gl) gl.viewport(0, 0, glc.width, glc.height);
+  const st = $("status");
+  st.style.left = (C[0] + 1.1 * S) + "px"; st.style.top = (C[1] + 0.25 * S) + "px";
+}
+
+function initGL() {
+  gl = glc.getContext("webgl", { antialias: false, premultipliedAlpha: true, alpha: true, depth: true });
+  if (!gl) { $("nogl").style.display = "flex"; return; }
+  try {
+    const sh = (type, s) => { const o = gl.createShader(type); gl.shaderSource(o, s); gl.compileShader(o);
+      if (!gl.getShaderParameter(o, gl.COMPILE_STATUS)) throw new Error(gl.getShaderInfoLog(o)); return o; };
+    prog = gl.createProgram();
+    gl.attachShader(prog, sh(gl.VERTEX_SHADER, VS)); gl.attachShader(prog, sh(gl.FRAGMENT_SHADER, FS));
+    gl.linkProgram(prog);
+    if (!gl.getProgramParameter(prog, gl.LINK_STATUS)) throw new Error(gl.getProgramInfoLog(prog));
+  } catch (e) { console.error(e); prog = null; $("nogl").style.display = "flex"; return; }
+  gl.useProgram(prog);
+  for (const u of ["uRes", "uC", "uS", "uOrb", "uDpr", "uHor", "uT", "uE", "uSib", "uTh", "uYaw", "uPitch", "uRoll", "uAsmT", "uMode", "uPass", "uScene", "uBead"])
+    U[u] = gl.getUniformLocation(prog, u);
+  gl.enable(gl.BLEND); gl.blendFunc(gl.ONE, gl.ONE);
+  gl.clearColor(0, 0, 0, 0);
+  gl.depthFunc(gl.LESS);
+  loadModel().then(uploadModel).catch((e) => console.error("bust build failed", e));
+}
+
+const MODEL_VERSION = 6;
+function modelParams() {
+  const clamp = (v, a, b) => Math.min(b, Math.max(a, v));
+  // spacing in real device pixels: a 4K screen at 150 % scaling has 1.5x the pixels per CSS px
+  const Sd = S * Math.max(1, devicePixelRatio || 1);
+  const front = clamp(3.3 / Sd, 0.0062, 0.0095);
+  return { ring: +clamp(5.0 / Sd, 0.0105, 0.026).toFixed(4), front: +front.toFixed(4), back: +(front * 3.2).toFixed(4),
+           fly: Sd > 330 ? 1 : 2 };
+}
+function idb() {
+  return new Promise((res, rej) => {
+    const r = indexedDB.open("jarvis", 1);
+    r.onupgradeneeded = () => r.result.createObjectStore("models");
+    r.onsuccess = () => res(r.result); r.onerror = () => rej(r.error);
+  });
+}
+async function cacheGet(key) {
+  try { const db = await idb(); return await new Promise((res) => {
+    const q = db.transaction("models").objectStore("models").get(key); q.onsuccess = () => res(q.result || null); q.onerror = () => res(null); });
+  } catch (e) { return null; }
+}
+async function cachePut(key, val) {
+  try { const db = await idb(); db.transaction("models", "readwrite").objectStore("models").put(val, key); } catch (e) { /* no storage: rebuild next time */ }
+}
+async function loadModel() {
+  const prm = modelParams();
+  const key = `bust-v${MODEL_VERSION}-` + JSON.stringify(prm);
+  const t0 = performance.now();
+  let m = await cacheGet(key);
+  if (!m) {
+    // the sculpt + slicing code runs as-is inside a worker, so the page keeps animating the orb
+    const fnSrc = (f) => (f.toString().startsWith("function") ? f.toString() : `const ${f.name} = ${f.toString()};`);
+    const body = [ss, hypot3, sdEll, sdCap, smin, ssub, sdf, surfaceAt, normalAt, hash2, noise2, ridge, buildModel]
+      .map(fnSrc).join("\n")
+      + "\nconst RC = " + RC + ";\nconst K_SURF = 0, K_NERVE = 3, K_DUST = 4, K_MTN = 5, K_FLY = 6;"
+      + "\nonmessage = (e) => { const m = buildModel(e.data); postMessage(m, [m.P.buffer, m.N.buffer, m.I.buffer]); };";
+    const head = "";
+    const url = URL.createObjectURL(new Blob([head + body], { type: "text/javascript" }));
+    m = await new Promise((res, rej) => { const w = new Worker(url); w.onmessage = (e) => { res(e.data); w.terminate(); }; w.onerror = rej; w.postMessage(prm); });
+    URL.revokeObjectURL(url);
+    cachePut(key, m);
+  }
+  console.log(`bust: ${m.n} points (${m.nSurf} surface) in ${Math.round(performance.now() - t0)} ms`, prm);
+  m.prm = prm;
+  return m;
+}
+function uploadModel(m) {
+  const bind = (name, data, size) => {
+    const loc = gl.getAttribLocation(prog, name); if (loc < 0) return;
+    const b = gl.createBuffer(); gl.bindBuffer(gl.ARRAY_BUFFER, b); gl.bufferData(gl.ARRAY_BUFFER, data, gl.STATIC_DRAW);
+    gl.enableVertexAttribArray(loc); gl.vertexAttribPointer(loc, size, gl.FLOAT, false, 0, 0);
+  };
+  bind("aPos", m.P, 3); bind("aNorm", m.N, 3); bind("aInfo", m.I, 4);
+  M = m;
+}
+
+/* ------------------------------ state machine ------------------------------ */
+// ember (source orb only) -> assemble -> shown -> dissolve -> ember, driven by LIVE.status
+const ASM_S = 4.6, DIS_S = 3.2, WAKE_S = 5.1;
+const ST = { mode: "ember", t0: performance.now(), energy: 0, think: 0, wake: 1, scene: 0, slept: false };
+function begin(mode) { ST.mode = mode; ST.t0 = performance.now(); }
+function drive(now) {
+  const s = LIVE.status;
+  if (LIVE.plan) {
+    if (ST.mode === "shown" || ST.mode === "assemble" || ST.mode === "wake") begin("dissolve");
+    if (ST.mode === "ember" && !PLAN.open) openPlan();
+  } else {
+    if (PLAN.open) closePlan(now);
+    if (s === "sleeping") {
+      ST.slept = true;
+      if (ST.mode === "shown" || ST.mode === "assemble" || ST.mode === "wake") begin("dissolve");
+    } else if ((ST.mode === "ember" || ST.mode === "dissolve") && s !== "booting" && M && now > PLAN.closingUntil) {
+      begin("wake");
+      ST.slept = false;
+    }
+  }
+  const t = (now - ST.t0) / 1000;
+  if (ST.mode === "assemble" && t > ASM_S) begin("shown");
+  if (ST.mode === "wake" && t > WAKE_S) { begin("shown"); ST.booted = true; }
+  if (ST.mode === "dissolve" && t > DIS_S) begin("ember");
+  const lvl = s === "speaking" || LIVE.level > 0.03 ? LIVE.level : 0;
+  ST.energy += (lvl - ST.energy) * (lvl > ST.energy ? 0.5 : 0.12);
+  ST.think += ((s === "thinking" ? 1 : 0) - ST.think) * 0.06;
+  ST.wake += ((s === "sleeping" ? 0 : 1) - ST.wake) * 0.02;
+  ST.scene += ((ST.mode === "ember" ? 0.35 : 1) - ST.scene) * 0.02;
+}
+
+// HUD furniture around the bust: segmented arcs with degree ticks turning slowly both ways,
+// a thin dashed inner ring, a sweep marker, and corner brackets framing the screen
+function drawHud(t, shown, e, th) {
+  if (shown < 0.02) return;
+  const hx = C[0], hy = C[1] - 0.05 * S, a = shown;
+  cx.save();
+  cx.globalCompositeOperation = "lighter";
+  cx.lineCap = "butt";
+  const arc = (r, a0, a1, w, col) => { cx.strokeStyle = col; cx.lineWidth = w; cx.beginPath(); cx.arc(hx, hy, r, a0, a1); cx.stroke(); };
+  const spin = reduce ? 0 : t * (0.03 + 0.12 * th);
+  const R1 = S * 1.78;
+  for (const [c0, c1] of [[-0.95, 0.95], [Math.PI - 0.95, Math.PI + 0.95]]) {
+    arc(R1, c0 + spin, c1 + spin, 1.2, `rgba(111, 216, 255, ${0.35 * a})`);
+    let n = 0;
+    for (let d = c0; d <= c1 + 1e-6; d += Math.PI / 36, n++) {        // a tick every 5 degrees
+      const major = n % 6 === 0;
+      const ang = d + spin, r2 = R1 + (major ? S * 0.07 : S * 0.035);
+      cx.strokeStyle = `rgba(111, 216, 255, ${(major ? 0.55 : 0.28) * a})`; cx.lineWidth = 1;
+      cx.beginPath(); cx.moveTo(hx + Math.cos(ang) * R1, hy + Math.sin(ang) * R1); cx.lineTo(hx + Math.cos(ang) * r2, hy + Math.sin(ang) * r2); cx.stroke();
+      if (major) {
+        const deg = ((Math.round((ang * 180) / Math.PI) % 360) + 360) % 360;
+        cx.fillStyle = `rgba(160, 225, 255, ${0.5 * a})`;
+        cx.font = `500 ${Math.round(S * 0.045)}px Oxanium, sans-serif`; cx.textAlign = "center"; cx.textBaseline = "middle";
+        cx.fillText(String(deg).padStart(3, "0"), hx + Math.cos(ang) * (R1 + S * 0.14), hy + Math.sin(ang) * (R1 + S * 0.14));
+      }
+    }
+  }
+  cx.setLineDash([S * 0.02, S * 0.035]);                                // inner ring turning the other way
+  arc(S * 1.52, -spin * 1.6, -spin * 1.6 + Math.PI * 2, 1, `rgba(111, 216, 255, ${(0.16 + 0.3 * e) * a})`);
+  cx.setLineDash([]);
+  const sw = reduce ? -0.5 : t * (0.5 + 2.5 * th);                       // sweep marker on the outer arc
+  arc(R1 + S * 0.02, sw, sw + 0.18, 3, `rgba(255, 190, 110, ${0.55 * a})`);
+  const m = Math.max(18, W * 0.012), L = Math.max(40, W * 0.03);         // corner brackets
+  cx.strokeStyle = `rgba(111, 216, 255, ${0.35 * a})`; cx.lineWidth = 1.5;
+  for (const [x, y, sx, sy] of [[m, m, 1, 1], [W - m, m, -1, 1], [m, H - m, 1, -1], [W - m, H - m, -1, -1]]) {
+    cx.beginPath(); cx.moveTo(x, y + sy * L); cx.lineTo(x, y); cx.lineTo(x + sx * L, y); cx.stroke();
+  }
+  cx.restore();
+}
+
+const T0 = performance.now();
+function frame(now) {
+  drive(now);
+  const t = (now - T0) / 1000 * (reduce ? 0.3 : 1) * (0.4 + 0.6 * ST.wake);
+  const mode = { ember: 3, assemble: 1, shown: 0, dissolve: 2, wake: 4 }[ST.mode];
+  const asmT = (now - ST.t0) / 1000;
+  const e = ST.energy, th = ST.think;
+
+  // ------- 2D layer: horizon haze, concentric rings, the core glow, the source orb -------
+  cx.clearRect(0, 0, W, H);
+  const haze = cx.createLinearGradient(0, HOR - 0.5 * S, 0, HOR + 1.4 * S);
+  haze.addColorStop(0, "rgba(40, 120, 220, 0)");
+  haze.addColorStop(0.55, `rgba(40, 120, 220, ${0.10 * ST.scene})`);
+  haze.addColorStop(1, "rgba(40, 120, 220, 0)");
+  cx.fillStyle = haze; cx.fillRect(0, HOR - 0.5 * S, W, 1.9 * S);
+  const shown = ST.mode === "shown" ? 1 : ST.mode === "assemble" ? ss((asmT - 2.4) / 1.8)
+    : ST.mode === "wake" ? ss((asmT - 2.4) / 2.2) : ST.mode === "dissolve" ? 1 - ss(asmT / 1.6) : 0;
+  const head = [C[0], C[1] - 0.1 * S];
+  cx.globalCompositeOperation = "lighter";
+  for (let i = 0; i < 9; i++) {
+    const phase = (t * 0.08 + i / 9) % 1;
+    const r = S * (1.3 + i * 0.13 + (reduce ? 0 : 0.02 * Math.sin(t * 1.3 + i))) * (1 + e * 0.04 * Math.sin(t * 8 - i));
+    cx.strokeStyle = `rgba(111, 216, 255, ${(0.09 + 0.05 * Math.sin(phase * Math.PI * 2) + 0.12 * e) * shown * (1 - i / 11)})`;
+    cx.lineWidth = 1;
+    cx.beginPath(); cx.arc(head[0], head[1], r, 0, Math.PI * 2); cx.stroke();
+  }
+  if (shown > 0.01) {
+    const rc = S * (0.55 + 0.16 * e), gy = C[1] + 0.1 * S;
+    const gcore = cx.createRadialGradient(C[0], gy, 0, C[0], gy, rc);
+    const hot = Math.min(1, 0.25 + e * 1.6);
+    gcore.addColorStop(0, th > 0.5 ? `rgba(200, 240, 255, ${0.25 * shown})` : `rgba(255, ${Math.round(170 + 60 * hot)}, 90, ${(0.14 + 0.28 * hot) * shown})`);
+    gcore.addColorStop(1, "rgba(255, 90, 10, 0)");
+    cx.fillStyle = gcore;
+    cx.beginPath(); cx.ellipse(C[0], gy, rc * 0.85, rc * 1.1, 0, 0, Math.PI * 2); cx.fill();
+  }
+  drawHud(t, shown, e, th);
+  const orbA = ST.mode === "wake" ? (0.8 + 0.2 * ss(asmT / 0.8)) * (1 - ss((asmT - 1.6) / 1.6))
+             : ST.mode === "ember" ? 0.75 + 0.25 * Math.sin(t * (ST.wake < 0.5 ? 1.6 : 3.0))
+             : ST.mode === "assemble" ? 1 - ss((asmT - 3.3) / 1.0) : ST.mode === "dissolve" ? 0.2 + 0.6 * ss((asmT - 0.8) / 2.0) : 0;
+  if (orbA > 0.01) {
+    const r = S * 0.12 * (1 + 0.08 * Math.sin(t * 6)) * (ST.mode === "wake" ? 1 + 0.5 * ss(asmT / 1.2) : 1);
+    const go = cx.createRadialGradient(ORB[0], ORB[1], 0, ORB[0], ORB[1], r * 4);
+    go.addColorStop(0, `rgba(255, 255, 255, ${orbA})`);
+    go.addColorStop(0.1, `rgba(170, 230, 255, ${orbA})`);
+    go.addColorStop(0.3, `rgba(60, 150, 255, ${0.45 * orbA})`);
+    go.addColorStop(1, "rgba(20, 90, 255, 0)");
+    cx.fillStyle = go;
+    cx.beginPath(); cx.arc(ORB[0], ORB[1], r * 4, 0, Math.PI * 2); cx.fill();
+    cx.strokeStyle = `rgba(170, 230, 255, ${0.35 * orbA})`;
+    cx.beginPath(); cx.arc(ORB[0], ORB[1], r * (1.6 + 0.3 * Math.sin(t * 3)), 0, Math.PI * 2); cx.stroke();
+  }
+  cx.globalCompositeOperation = "source-over";
+
+  // ------- WebGL: mountains (hidden behind the bust), then the bust -------
+  if (gl && prog && M) {
+    gl.clear(gl.COLOR_BUFFER_BIT | gl.DEPTH_BUFFER_BIT);
+    const yaw = reduce ? 0 : 0.30 * Math.sin(t * 0.23) + 0.06 * Math.sin(t * 0.83 + 1.3);
+    const pitch = reduce ? 0 : 0.05 * Math.sin(t * 0.5) + 0.04 * e * Math.sin(t * 7) - 0.04 * th;
+    const roll = reduce ? 0 : 0.03 * Math.sin(t * 0.41 + 0.7) + 0.04 * th;
+    gl.uniform2f(U.uRes, W, H); gl.uniform2f(U.uC, C[0], C[1]); gl.uniform1f(U.uS, S); gl.uniform2f(U.uOrb, ORB[0], ORB[1]);
+    gl.uniform1f(U.uDpr, DPR); gl.uniform1f(U.uHor, HOR); gl.uniform1f(U.uT, t); gl.uniform1f(U.uE, e); gl.uniform1f(U.uSib, LIVE.sib);
+    gl.uniform1f(U.uTh, th); gl.uniform1f(U.uYaw, yaw); gl.uniform1f(U.uPitch, pitch); gl.uniform1f(U.uRoll, roll);
+    gl.uniform1f(U.uAsmT, asmT); gl.uniform1f(U.uMode, mode); gl.uniform1f(U.uScene, ST.scene);
+    gl.uniform1f(U.uBead, Math.max(1.6, M.prm.front * S * 0.95));
+    const bustOn = mode !== 3;
+    gl.enable(gl.DEPTH_TEST);
+    if (bustOn) {                                         // occluder into the depth buffer only
+      gl.colorMask(false, false, false, false); gl.depthMask(true);
+      gl.uniform1f(U.uPass, 2); gl.drawArrays(gl.POINTS, 0, M.nSurf);
+      gl.colorMask(true, true, true, true);
+    }
+    gl.depthMask(false);
+    gl.uniform1f(U.uPass, 1); gl.drawArrays(gl.POINTS, M.nBust, M.nFly0 - M.nBust);
+    gl.uniform1f(U.uPass, 0); gl.drawArrays(gl.POINTS, M.nBust, M.nFly0 - M.nBust);
+    gl.disable(gl.DEPTH_TEST);
+    if (bustOn) {
+      gl.uniform1f(U.uPass, 1); gl.drawArrays(gl.POINTS, 0, M.nBust);   // glow + trails
+      gl.uniform1f(U.uPass, 0); gl.drawArrays(gl.POINTS, 0, M.nBust);   // crisp orbs
+      if (mode === 1 || mode === 2 || mode === 4) {                      // the dense stream / the burst
+        gl.uniform1f(U.uPass, 1); gl.drawArrays(gl.POINTS, M.nFly0, M.n - M.nFly0);
+        gl.uniform1f(U.uPass, 0); gl.drawArrays(gl.POINTS, M.nFly0, M.n - M.nFly0);
+      }
+    }
+  }
+
+  // ------- labels -------
+  const label = ST.mode === "assemble" ? `ASSEMBLING… ${Math.min(100, Math.round(asmT / (ASM_S - 0.4) * 100))}%`
+    : ST.mode === "wake" ? (ST.booted ? "REACTIVATING…" : "INITIALIZING…")
+    : LIVE.muted ? "MIC OFF · F9"
+    : LIVE.status === "sleeping" ? "STANDBY · F10 / HEY JARVIS"
+    : ST.mode === "ember" || ST.mode === "dissolve" ? "STATUS: STANDBY"
+    : `STATUS: ${({ thinking: "THINKING", speaking: "SPEAKING" }[LIVE.status] || (e > 0.05 ? "SPEAKING" : "LISTENING"))}`;
+  const st = $("status");
+  if (st.dataset.t !== label + LIVE.watching) {
+    st.dataset.t = label + LIVE.watching;
+    st.innerHTML = esc(label) + (LIVE.watching ? '<span class="rec" title="Джарвис следит за экраном"></span>' : "");
+  }
+  st.style.opacity = ST.mode === "ember" ? 0.5 : 0.85;
+  if (LIVE.linesAt && now - LIVE.linesAt > 15000 && LIVE.status !== "speaking") $("subs").style.opacity = 0;
+  renderTele();
+  const teleA = ST.mode === "shown" ? 1 : ST.mode === "assemble" ? ss((asmT - 2.4) / 1.5)
+    : ST.mode === "wake" ? ss((asmT - 3.0) / 1.6) : 0.25;
+  $("teleL").style.opacity = $("teleR").style.opacity = teleA;
+  requestAnimationFrame(frame);
+}
+
+addEventListener("keydown", (e) => {
+  if (e.key !== "Escape") return;
+  if (LIVE.plan) setPlan(false); else window.close();      // Esc: out of the plan first, then close
+});
+// clicks and Esc inside the plan frame come here too
+addEventListener("message", (ev) => { if (ev.data === "back") setPlan(false); });
+addEventListener("resize", layout);
+layout();
+initGL();
+loadData();
+clockTick();
+setInterval(clockTick, 1000);
+pollSys(); setInterval(pollSys, 2000);
+setInterval(loadData, 15000);
+setInterval(renderPlan, 30000);
+connect();
+// without a live link (opened as a plain file) still assemble once and show the plan
+setTimeout(() => { if (!LIVE.connected) { LIVE.status = "listening"; LIVE.plan = !FACE_ONLY; } }, 1500);
+requestAnimationFrame(frame);
+</script>
+</body>
+</html>

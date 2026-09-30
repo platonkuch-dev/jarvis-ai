@@ -19,6 +19,7 @@ import traceback
 from google.genai import types
 
 from core import latency, tool_registry
+from core.assistant_state import get_state, record_activity
 from memory.memory_manager import update_memory
 from memory.pattern_learning import log_tool_call
 
@@ -39,9 +40,38 @@ from actions.code_helper       import code_helper
 from actions.dev_agent         import dev_agent
 from actions.web_search        import web_search as web_search_action
 from actions.computer_control  import computer_control
+from actions.computer_agent    import computer_agent
 from actions.game_updater      import game_updater
 from actions.system_monitor    import get_system_status
+from actions.system_scan       import system_scan
+from actions.system_diagnostics import system_diagnostics
+from actions.process_hunter    import find_suspicious_processes
+from actions.hacker_terminal   import run_terminal_command
+from actions.digital_ghost     import digital_ghost
+from actions.jarvis_control    import jarvis_control
 from actions.window_control    import window_manager, ui_automation, launch_and_verify
+from actions.self_extend       import add_capability
+
+# core/tool_registry.py's GATED_LEVELS is a deliberate, project-wide no-op
+# (see its own docstring) -- nothing there is gated today. hacker_terminal
+# and add_capability used to be force-gated locally here regardless of that
+# shared switch (arbitrary shell / self-written code being the two things
+# with the widest blast radius in the app) -- explicitly turned off at the
+# user's request (2026-09-03): they want every action, including these,
+# to run on the first request with no confirmation step. Left as a plain
+# `set`, not removed outright, so core/custom_tools.py's register_tool()
+# still has somewhere to add a future self-authored tool's own name if its
+# generated risk assessment calls for staying gated (a user asking JARVIS
+# to write itself a new DANGEROUS tool is a separate decision from this
+# one, made per-tool by Claude at generation time -- not overridden here).
+_LOCALLY_GATED_TOOLS: set[str] = set()
+
+# Handlers for self-authored tools (actions/self_extend.py's add_capability
+# writes these; core/custom_tools.py registers them here both live and on
+# every startup reload). Unlike every built-in tool above, these aren't
+# known at import time -- dispatched generically below instead of getting
+# their own elif branch.
+_CUSTOM_TOOL_HANDLERS: dict = {}
 
 
 async def execute_tool(self, fc) -> types.FunctionResponse:
@@ -61,6 +91,20 @@ async def execute_tool(self, fc) -> types.FunctionResponse:
         print(f"[JARVIS] 🔧 {name}  {args}")
         self.ui.set_state("THINKING")
         log_tool_call(name, args)
+        capability = {
+            "browser_control": "browser", "file_controller": "files", "file_processor": "files",
+            "send_message": "messaging", "send_screenshot": "messaging",
+            "computer_agent": "screen",
+        }.get(name)
+        if name == "screen_process":
+            capability = "camera" if args.get("angle", "screen").lower() == "camera" else "screen"
+        if capability and not get_state()["privacy"].get(capability, True):
+            result = f"The {capability} permission is blocked in JARVIS privacy settings."
+            record_activity(name, result, "blocked")
+            if not self.ui.muted:
+                self.ui.set_state("LISTENING")
+            return types.FunctionResponse(id=fc.id, name=name, response={"result": result})
+        record_activity(name, str(args), "started")
 
         # Risk gate: SENSITIVE/DANGEROUS actions (per core/tool_registry.py's
         # classification, itself grounded in AUDIT.md's Stage-1 findings) do
@@ -69,7 +113,7 @@ async def execute_tool(self, fc) -> types.FunctionResponse:
         # explicitly agreed. This runs before the save_memory short-circuit
         # too (save_memory is NORMAL/ungated, so it's a no-op for that path).
         risk = tool_registry.resolve_risk(name, args)
-        if risk in tool_registry.GATED_LEVELS and not confirmed:
+        if (risk in tool_registry.GATED_LEVELS or name in _LOCALLY_GATED_TOOLS) and not confirmed:
             if not self.ui.muted:
                 self.ui.set_state("LISTENING")
             latency.record(name, (time.monotonic() - _t_start) * 1000)
@@ -212,6 +256,10 @@ async def execute_tool(self, fc) -> types.FunctionResponse:
                 r = await loop.run_in_executor(None, lambda: dev_agent(parameters=args, player=self.ui, speak=self.speak))
                 result = r or "Done."
 
+            elif name == "add_capability":
+                r = await loop.run_in_executor(None, lambda: add_capability(parameters=args, player=self.ui, speak=self.speak))
+                result = r or "Done."
+
             elif name == "web_search":
                 r = await loop.run_in_executor(None, lambda: web_search_action(parameters=args, player=self.ui, speak=self.speak))
                 result = r or "Done."
@@ -234,6 +282,10 @@ async def execute_tool(self, fc) -> types.FunctionResponse:
                 r = await loop.run_in_executor(None, lambda: computer_control(parameters=args, player=self.ui))
                 result = r or "Done."
 
+            elif name == "computer_agent":
+                r = await loop.run_in_executor(None, lambda: computer_agent(parameters=args, player=self.ui))
+                result = r or "Done."
+
             elif name == "window_manager":
                 r = await loop.run_in_executor(None, lambda: window_manager(parameters=args, player=self.ui))
                 result = r or "Done."
@@ -254,6 +306,36 @@ async def execute_tool(self, fc) -> types.FunctionResponse:
                 r = await loop.run_in_executor(None, get_system_status)
                 result = str(r)
 
+            elif name == "system_scan":
+                r = await loop.run_in_executor(
+                    None,
+                    lambda: system_scan(parameters=args, player=self.ui, on_status=self._on_system_scan_status)
+                )
+                result = r or "Microsoft Defender scan started."
+
+            elif name == "system_diagnostics":
+                r = await loop.run_in_executor(None, lambda: system_diagnostics(parameters=args, player=self.ui))
+                result = r or "Diagnostics complete."
+
+            elif name == "process_hunter":
+                r = await loop.run_in_executor(None, lambda: find_suspicious_processes(parameters=args, player=self.ui))
+                result = r or "Scan complete."
+
+            elif name == "hacker_terminal":
+                r = await loop.run_in_executor(None, lambda: run_terminal_command(parameters=args, player=self.ui))
+                result = r or "Done."
+
+            elif name == "digital_ghost":
+                r = await loop.run_in_executor(None, lambda: digital_ghost(parameters=args, player=self.ui))
+                result = r or "Done."
+
+            elif name == "jarvis_control":
+                r = await loop.run_in_executor(None, lambda: jarvis_control(parameters=args, player=self.ui))
+                result = r or "JARVIS settings updated."
+                if str(args.get("action", "")).lower() in {"power_on", "power_off"}:
+                    self.ui.set_power_mode(get_state()["power_mode"]["enabled"])
+                self.ui.show_content("JARVIS control", result)
+
             elif name == "shutdown_jarvis":
                 self.ui.write_log("SYS: Shutdown requested.")
                 self.speak("Goodbye.")
@@ -262,6 +344,11 @@ async def execute_tool(self, fc) -> types.FunctionResponse:
                     time.sleep(1)
                     os._exit(0)
                 threading.Thread(target=_shutdown, daemon=True).start()
+
+            elif name in _CUSTOM_TOOL_HANDLERS:
+                handler = _CUSTOM_TOOL_HANDLERS[name]
+                r = await loop.run_in_executor(None, lambda: handler(parameters=args, player=self.ui))
+                result = r or "Done."
 
             else:
                 result = f"Unknown tool: {name}"
@@ -287,6 +374,7 @@ async def execute_tool(self, fc) -> types.FunctionResponse:
             self.ui.set_state("LISTENING")
 
         latency.record(name, (time.monotonic() - _t_start) * 1000)
+        record_activity(name, str(result), "done")
         print(f"[JARVIS] 📤 {name} → {str(result)[:80]}")
         return types.FunctionResponse(
             id=fc.id, name=name,

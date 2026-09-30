@@ -25,6 +25,17 @@ try:
 except ImportError:
     _PYPERCLIP = False
 
+# core/tool_registry.py's GATED_LEVELS is a deliberate, project-wide no-op
+# (see its own docstring) -- nothing there is gated today. restart,
+# toggle_wifi/wifi, dark_mode, lock_screen/lock and sleep_display/sleep used
+# to be force-gated locally here too (mirroring core/tool_dispatch.py's
+# _LOCALLY_GATED_TOOLS pattern for hacker_terminal) -- disabled at the
+# user's explicit request (2026-09-03): every action runs on the first
+# request with no confirmation step, EXCEPT shutdown, which the user asked
+# to keep gated (the one action here with no undo at all -- restart at
+# least brings the machine back up on its own).
+_LOCALLY_GATED_ACTIONS = frozenset({"shutdown"})
+
 _OS = platform.system()  # "Windows" | "Darwin" | "Linux"
 
 if _OS == "Windows":
@@ -214,8 +225,14 @@ def brightness_down():
             print(f"[Settings] Brightness down failed on Windows: {e}")
 
 def close_app():
-    if _OS == "Darwin": pyautogui.hotkey("command", "q")
-    else:               pyautogui.hotkey("alt", "f4")
+    if _OS == "Darwin":
+        pyautogui.hotkey("command", "q")
+        return "Close command sent."
+    if _OS == "Windows":
+        from windows_control.router import close
+        return close().as_str()
+    pyautogui.hotkey("alt", "f4")
+    return "Close command sent."
 
 def close_window():
     if _OS == "Darwin": pyautogui.hotkey("command", "w")
@@ -634,12 +651,20 @@ Return ONLY a valid JSON object:
 {{"action": "action_name", "value": null_or_value}}
 
 Rules:
-- Pick the single best matching action from the available list.
+- Pick the single best matching action from the available list, but ONLY if the
+  description is actually asking this assistant to change or trigger that OS-level
+  setting/action right now.
+- type_text/press_key are special: pick them ONLY when the description explicitly
+  asks to type specific text or press a specific named key. Never pick them as a
+  generic fallback for a request that doesn't clearly match anything else -- a
+  question, a request for information, or small talk is NOT a request to type
+  itself out on screen.
 - For volume_set: value is an integer 0-100.
 - For type_text: value is the exact text to type.
 - For press_key: value is the key name (e.g. "f5", "tab", "enter").
 - For reload_n: value is an integer (number of times to reload).
-- If no clear match, pick the closest action.
+- If nothing in the available list is genuinely what's being asked for, return
+  exactly {{"action": "unsupported", "value": null}} -- do not force a guess.
 - Return ONLY the JSON, no explanation, no markdown."""
 
     text = None
@@ -697,11 +722,24 @@ def computer_settings(
     # one extra round trip instead of a dead "Unknown action" the user has
     # to notice and repeat themselves over.
     if action not in _KNOWN_ACTIONS and (description or raw_action):
-        detected   = _detect_action(description or raw_action)
+        original_request = description or raw_action
+        detected   = _detect_action(original_request)
         raw_action = detected.get("action", "")
         action     = raw_action.lower().strip().replace(" ", "_").replace("-", "_")
         if value is None:
             value = detected.get("value")
+
+        # The fuzzy detector explicitly declined to force a match (see its
+        # prompt) -- this is the fix for a real bug found live: "what time is
+        # it" had no real computer_settings action, so the old prompt (which
+        # required SOME guess) forced 'type_text' and literally typed the
+        # question into whatever window was focused. Bail out here instead
+        # of falling through to type_text/press_key with an unrelated value.
+        if action == "unsupported":
+            return (
+                f"'{original_request}' is not a computer setting I can act on "
+                "(no matching action) -- answer it directly instead, don't retry this tool."
+            )
 
     if not action:
         return "No action could be determined."
@@ -721,7 +759,7 @@ def computer_settings(
     # (toggle_wifi/dark_mode/lock_screen/sleep_display had no inner check of
     # their own, unlike restart/shutdown's old dedicated one this replaces).
     _risk = _tool_registry.resolve_risk("computer_settings", {"action": action})
-    if _risk in _tool_registry.GATED_LEVELS:
+    if _risk in _tool_registry.GATED_LEVELS or action in _LOCALLY_GATED_ACTIONS:
         confirmed = str(params.get("confirmed", "")).lower() in ("yes", "true", "1", "confirm")
         if not confirmed:
             return _tool_registry.confirmation_prompt("computer_settings", {"action": action}, _risk)

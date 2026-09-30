@@ -67,8 +67,15 @@ FIELDS: list[dict[str, Any]] = [
     {"group": "openai", "key": "OPENAI_API_KEY", "label": "API-ключ OpenAI", "secret": True,
      "placeholder": "sk-…", "help": "platform.openai.com → API keys. Нужен, только если ниже выбран OpenAI."},
     {"group": "openai", "key": "LLM_PROVIDER", "label": "Модель для разговора", "type": "select",
-     "options": [["anthropic", "Claude (по умолчанию)"], ["openai", "GPT-6 (Sol/Luna)"]],
+     "options": [["anthropic", "Claude (по умолчанию)"], ["claude_code", "Claude Code — по подписке, без API"],
+                 ["openai", "GPT-6 (Sol/Luna)"],
+                 ["ollama", "Локальная модель (Ollama) — бесплатно"]],
      "help": "Кто отвечает на ваши слова и вызывает инструменты."},
+    {"group": "openai", "key": "OLLAMA_MODEL", "label": "Локальная модель Ollama", "placeholder": "jarvis-qwen3",
+     "help": "Создаётся скриптом scripts/setup_local_llm.bat. Используется, только если выше выбрана Ollama."},
+    {"group": "openai", "key": "JARVIS_PERSONA", "label": "Характер", "type": "select",
+     "options": [["classic", "Вежливый помощник"], ["roast", "Дерзкий кореш: подколы, мат, смех, мемы"]],
+     "help": "Мемы — звуковые файлы в папке data/memes, смех — в data/memes/смех."},
     {"group": "openai", "key": "OPENAI_MODEL", "label": "Модель GPT-6 для разговора", "placeholder": "gpt-6-luna",
      "help": "Оставьте пустым — будет быстрая gpt-6-luna. gpt-6-sol или gpt-6-astra — глубже, но медленнее."},
     {"group": "openai", "key": "COMPUTER_USE_PROVIDER", "label": "Модель для управления экраном", "type": "select",
@@ -100,7 +107,36 @@ FIELDS: list[dict[str, Any]] = [
     {"group": "livekit", "key": "LIVEKIT_API_SECRET", "label": "API Secret", "secret": True, "placeholder": "…"},
     {"group": "livekit", "key": "PHONE_ALLOWED_NUMBERS", "label": "Номера с полным доступом", "placeholder": "+380501234567, …",
      "help": "Только эти номера могут по телефону управлять компьютером. Остальным — просто разговор. Пусто — никому."},
+    {"group": "home", "key": "HOME_ASSISTANT_URL", "label": "Адрес Home Assistant", "placeholder": "http://homeassistant.local:8123",
+     "help": "Адрес, по которому Home Assistant открывается в браузере."},
+    {"group": "home", "key": "HOME_ASSISTANT_TOKEN", "label": "Токен доступа", "secret": True, "placeholder": "eyJ…",
+     "help": "Home Assistant → ваш профиль → Безопасность → «Долгосрочные токены доступа» → Создать."},
+    {"group": "home", "key": "LED_STRIP_ADDRESS", "label": "Адрес LED-ленты (Lotus Lantern)", "placeholder": "BE:67:00:AA:BB:CC",
+     "help": "Необязательно: пусто — Джарвис сам найдёт ленту по Bluetooth. Закройте Lotus Lantern на телефоне."},
+    {"group": "mail", "key": "EMAIL_ADDRESS", "label": "Адрес почты", "placeholder": "you@gmail.com",
+     "help": "Gmail, Яндекс, Mail.ru, Outlook, ukr.net — серверы подставятся сами."},
+    {"group": "mail", "key": "EMAIL_APP_PASSWORD", "label": "Пароль приложения", "secret": True, "placeholder": "…",
+     "help": "Не основной пароль! Gmail: myaccount.google.com/apppasswords. Яндекс/Mail.ru: настройки безопасности → пароли приложений."},
+    {"group": "mail", "key": "EMAIL_IMAP_HOST", "label": "IMAP-сервер", "placeholder": "определится сам",
+     "help": "Только для редкой почты, например imap.company.com."},
+    {"group": "mail", "key": "EMAIL_SMTP_HOST", "label": "SMTP-сервер", "placeholder": "определится сам"},
+    {"group": "extra", "key": "HUD_FACE_STYLE", "label": "Облик Джарвиса", "type": "select",
+     "options": [["core", "Голографическое ядро — сфера, реагирующая на голос"],
+                 ["head3d", "Голограмма головы"], ["humanoid", "Силуэт из сферы"]],
+     "help": "Применится после перезапуска."},
+    {"group": "extra", "key": "HUD_PANEL_AUTO", "label": "Панель Джарвиса на втором мониторе", "type": "select",
+     "options": [["1", "Открывать при запуске"], ["0", "Только по команде «открой план»"]],
+     "help": "Лицо Джарвиса, статус, субтитры и план дня во весь экран на втором мониторе."},
+    {"group": "extra", "key": "HOME_CITY", "label": "Ваш город (для погоды в сводке)", "placeholder": "из памяти Джарвиса"},
+    {"group": "extra", "key": "NEWS_FEEDS", "label": "Источники новостей (RSS)", "placeholder": "Название=https://…/rss, …",
+     "help": "Через запятую. Пусто — УНИАН, РБК-Украина, BBC Русская служба и Хабр."},
+    {"group": "extra", "key": "WAKE_WORD_ENABLED", "label": "Будить голосом «Hey Jarvis»", "type": "select",
+     "options": [["1", "Да (локально, бесплатно)"], ["0", "Нет — только клавишей"]],
+     "help": "Работает, только пока Джарвис спит. Если просыпается сам — поднимите порог ниже."},
+    {"group": "extra", "key": "WAKE_WORD_THRESHOLD", "label": "Порог срабатывания «Hey Jarvis»", "placeholder": "0.5",
+     "help": "0.3 — чутче, 0.7 — строже."},
     {"group": "extra", "key": "WAKE_HOTKEY", "label": "Клавиша сна/пробуждения", "placeholder": "f10"},
+    {"group": "extra", "key": "MIC_HOTKEY", "label": "Клавиша выключения микрофона", "placeholder": "f9"},
     {"group": "extra", "key": "SLEEP_AFTER_SILENCE_S", "label": "Автосон через (секунд тишины)", "placeholder": "180"},
     {"group": "extra", "key": "AUDIO_INPUT_DEVICE", "label": "Микрофон (номер или часть названия)", "placeholder": "по умолчанию"},
     {"group": "extra", "key": "AUDIO_OUTPUT_DEVICE", "label": "Динамики (номер или часть названия)", "placeholder": "по умолчанию"},
@@ -659,7 +695,9 @@ def _requirement(req: str, env: dict[str, str]) -> tuple[str, str]:
     if req == "windows":
         return ("ok", "") if platform.system() == "Windows" else ("na", "только Windows")
     if req == "anthropic":
-        return ("ok", "") if env.get("ANTHROPIC_API_KEY") else ("todo", "ключ Claude")
+        # LLM_PROVIDER=claude_code runs every Claude call on the subscription.
+        ok = env.get("ANTHROPIC_API_KEY") or env.get("LLM_PROVIDER") == "claude_code"
+        return ("ok", "") if ok else ("todo", "ключ Claude")
     if req == "deepgram":
         return ("ok", "") if env.get("DEEPGRAM_API_KEY") else ("todo", "ключ Deepgram")
     if req == "elevenlabs":
@@ -669,6 +707,12 @@ def _requirement(req: str, env: dict[str, str]) -> tuple[str, str]:
         if env.get("TELEGRAM_API_ID") and env.get("TELEGRAM_API_HASH") and _telegram_logged_in():
             return ("ok", "")
         return ("todo", "Telegram (ключи и вход)")
+    if req == "home_assistant":
+        ok = env.get("HOME_ASSISTANT_URL") and env.get("HOME_ASSISTANT_TOKEN")
+        return ("ok", "") if ok else ("todo", "адрес и токен Home Assistant")
+    if req == "email":
+        ok = env.get("EMAIL_ADDRESS") and env.get("EMAIL_APP_PASSWORD")
+        return ("ok", "") if ok else ("todo", "почта и пароль приложения")
     if req == "livekit":
         ok = all(env.get(k) for k in ("LIVEKIT_URL", "LIVEKIT_API_KEY", "LIVEKIT_API_SECRET"))
         return ("ok", "") if ok else ("todo", "LiveKit")
@@ -759,7 +803,8 @@ def start_jarvis() -> dict[str, Any]:
     if _running()["app"]:
         return {"ok": True, "message": "Джарвис уже запущен (значок в трее)."}
     env = read_env()
-    if not (env.get("ANTHROPIC_API_KEY") and env.get("DEEPGRAM_API_KEY")):
+    has_brain = env.get("ANTHROPIC_API_KEY") or env.get("LLM_PROVIDER") == "claude_code"
+    if not (has_brain and env.get("DEEPGRAM_API_KEY")):
         raise HTTPException(400, "Сначала укажите ключи Claude и Deepgram.")
     venv_py = BASE_DIR / ".venv" / "Scripts" / "pythonw.exe"
     sibling = Path(sys.executable).with_name("pythonw.exe")  # the installed app's bundled runtime

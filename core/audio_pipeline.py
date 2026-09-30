@@ -24,7 +24,59 @@ from core.session import clean_transcript as _clean_transcript
 CHANNELS            = 1
 SEND_SAMPLE_RATE    = 16000
 RECEIVE_SAMPLE_RATE = 24000
-CHUNK_SIZE          = 1024
+CHUNK_SIZE          = 512
+OUTPUT_LATENCY       = "low"
+
+# Pin the mic by name instead of trusting Windows' "default" input device:
+# on this machine that default resolves to "SteelSeries Sonar - Microphone",
+# a virtual mixer device that only carries audio if Sonar's own app routes
+# the physical mic into it -- when it doesn't (unconfigured/muted routing),
+# Jarvis still opens a stream and gets occasional noise (enough to trip
+# Silero VAD) but never actual recognizable speech, so both the wake phrase
+# and the Fast Path hotkey silently transcribe to nothing. Matching by name
+# sidesteps whatever the OS/Sonar currently call "default".
+INPUT_DEVICE_NAME = "fifine sc3"
+
+
+def _find_input_device(name_substring: str = INPUT_DEVICE_NAME) -> int | None:
+    """Returns the PortAudio device index whose name contains
+    `name_substring` (case-insensitive) AND actually accepts this module's
+    fixed capture format (SEND_SAMPLE_RATE/CHANNELS/int16).
+
+    Windows exposes the same physical mic multiple times, once per host API
+    (MME, DirectSound, WASAPI, WDM-KS) -- measured on this machine, the
+    WASAPI and WDM-KS entries for a USB mic rejected 16kHz outright
+    ("Invalid sample rate" / "Blocking API not supported") while MME and
+    DirectSound accepted it, so checking rather than assuming a "best"
+    host API (e.g. always preferring WASAPI) is what actually avoids a
+    silent-mic misconfiguration. Returns None (caller falls back to the
+    system default) if no match works -- e.g. the mic is unplugged or this
+    runs on a different machine."""
+    try:
+        devices = sd.query_devices()
+    except Exception as e:
+        print(f"[Audio] Could not query devices, using system default mic: {e}")
+        return None
+
+    candidates = [
+        i for i, dev in enumerate(devices)
+        if dev["max_input_channels"] > 0 and name_substring in dev["name"].lower()
+    ]
+    if not candidates:
+        print(f"[Audio] No input device matching '{name_substring}' found — using system default mic.")
+        return None
+
+    for i in candidates:
+        try:
+            sd.check_input_settings(device=i, samplerate=SEND_SAMPLE_RATE, channels=CHANNELS, dtype="int16")
+        except Exception:
+            continue
+        print(f"[Audio] Using input device #{i}: {devices[i]['name'].strip()}")
+        return i
+
+    print(f"[Audio] Found '{name_substring}' but no entry of it accepts "
+          f"{SEND_SAMPLE_RATE}Hz/{CHANNELS}ch — using system default mic.")
+    return None
 
 
 def _mark_response_started(self) -> None:
@@ -74,7 +126,7 @@ async def listen_audio(self):
         # utterance — otherwise Gemini would hear the same command and potentially
         # execute it a second time via its own function-calling.
         gated = (jarvis_speaking and not self.ui.barge_in_enabled) or fast_path_recording
-        if not gated and not self.ui.muted and not self._phone_active:
+        if not gated and not self.ui.muted and not self._phone_active and self.out_queue is not None:
             data = indata.tobytes()
             loop.call_soon_threadsafe(
                 self.out_queue.put_nowait,
@@ -87,6 +139,7 @@ async def listen_audio(self):
 
     try:
         with sd.InputStream(
+            device=_find_input_device(),
             samplerate=SEND_SAMPLE_RATE,
             channels=CHANNELS,
             dtype="int16",
@@ -113,6 +166,8 @@ async def receive_audio(self):
                         pass  # discard: interrupted
                     else:
                         _mark_response_started(self)
+                        if self._speaker_start_pending and self._audio_response_received_at is None:
+                            self._audio_response_received_at = time.monotonic()
                         if self._turn_done_event and self._turn_done_event.is_set():
                             self._turn_done_event.clear()
                         # Split into ~50 ms chunks so interrupt() stops audio within 50 ms
@@ -147,6 +202,7 @@ async def receive_audio(self):
                             in_buf.append(txt)
                             self._last_user_speech = time.monotonic()
                             self._turn_measured    = False
+                            self._speaker_start_pending = True
 
                     if sc.turn_complete:
                         if self._turn_done_event:
@@ -246,6 +302,7 @@ async def receive_audio(self):
                     )
                     self._tool_response_sent_at  = time.monotonic()
                     self._tool_reaction_measured = False
+                    self._speaker_start_pending = True
     except Exception as e:
         print(f"[JARVIS] ❌ Recv: {e}")
         traceback.print_exc()
@@ -259,6 +316,7 @@ async def play_audio(self):
         channels=CHANNELS,
         dtype="int16",
         blocksize=CHUNK_SIZE,
+        latency=OUTPUT_LATENCY,
     )
     stream.start()
 
@@ -280,6 +338,11 @@ async def play_audio(self):
                 continue
             self.set_speaking(True)
             try:
+                received_at = getattr(self, "_audio_response_received_at", None)
+                if received_at is not None:
+                    latency.record("speaker_first_audio", (time.monotonic() - received_at) * 1000)
+                    self._audio_response_received_at = None
+                    self._speaker_start_pending = False
                 await asyncio.to_thread(stream.write, chunk)
             except (RuntimeError, asyncio.CancelledError):
                 break   # executor shutting down — exit cleanly

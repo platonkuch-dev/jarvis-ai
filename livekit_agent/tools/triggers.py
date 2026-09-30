@@ -15,6 +15,7 @@ A trigger is "when X, do Y", stored in config.TRIGGERS_FILE:
         task         start a background task (tasks.py); "{detail}" in the
                      text is replaced by what fired it (the new file, the app)
         say          speak the text (and send it to Telegram if nobody's at the PC)
+        briefing     speak the morning briefing (tools/briefing.py, no LLM -- free)
 
 Detection is plain polling (psutil, os.scandir, GetLastInputInfo) every few
 seconds, no LLM. Creating/deleting a trigger needs the same spoken two-step
@@ -50,7 +51,7 @@ _MIN_GAP_S = 60.0          # a trigger never fires more often than this
 _DAILY_GRACE_S = 3600.0    # a daily trigger missed by up to an hour (PC was off) still fires
 
 WhenKind = Literal["daily", "interval", "app_start", "app_exit", "file_new", "idle", "battery_low", "startup"]
-ActionKind = Literal["scenario", "task", "say"]
+ActionKind = Literal["scenario", "task", "say", "briefing"]
 _WEEKDAYS, _WEEKEND = [0, 1, 2, 3, 4], [5, 6]
 
 
@@ -110,7 +111,8 @@ def describe(trigger: dict) -> str:
         "battery_low": lambda: f"когда заряд ниже {spec['percent']}%",
         "startup": lambda: "при запуске Джарвиса",
     }[kind]()
-    action = {"scenario": "запустить сценарий", "task": "выполнить задачу", "say": "сказать"}[trigger["action"]]
+    action = {"scenario": "запустить сценарий", "task": "выполнить задачу", "say": "сказать",
+              "briefing": "рассказать сводку"}[trigger["action"]]
     trust = " (без подтверждений)" if trigger.get("trusted") else ""
     return f"«{trigger['name']}»: {when} — {action} «{trigger['action_value']}»{trust}"
 
@@ -266,6 +268,13 @@ async def fire(trigger: dict, detail: str) -> None:
         if not runtime.user_present():
             notify.notify_owner(f"🔔 {text}", kind="trigger")
         await runtime.say(text)
+    elif action == "briefing":
+        impl = IMPL_REGISTRY.get("morning_briefing")
+        if impl is not None:
+            result = await impl(city="" if value in ("-", "сводка") else value)
+            if not runtime.user_present():
+                notify.notify_owner(f"☀️ {result.get('message', '')}", kind="trigger")
+            await runtime.say(result.get("message", ""))
 
 
 async def trigger_loop() -> None:
@@ -305,8 +314,10 @@ async def _create_trigger(*, name: str, when: str, when_value: str = "", action:
     spec = parse_when(when, when_value)
     if isinstance(spec, str):
         return {"status": "error", "message": spec}
-    if action not in ("scenario", "task", "say") or not action_value.strip():
-        return {"status": "error", "message": "Действие должно быть scenario, task или say, с непустым значением."}
+    if action == "briefing" and not action_value.strip():
+        action_value = "сводка"
+    if action not in ("scenario", "task", "say", "briefing") or not action_value.strip():
+        return {"status": "error", "message": "Действие должно быть scenario, task, say или briefing, с непустым значением."}
     trigger = {"id": uuid.uuid4().hex[:6], "name": name.strip(), "when": when, "spec": spec,
                "action": action, "action_value": action_value.strip(), "trusted": bool(trusted),
                "enabled": True, "created_ts": time.time(), "last_fired": 0}
@@ -353,8 +364,10 @@ async def create_trigger(
             file_new: folder path or "загрузки"/"рабочий стол"/"документы",
             optionally "|*.pdf"; battery_low: percent; startup: empty.
         action: scenario (run a saved scenario, free) | task (background task,
-            uses the LLM) | say (speak/send a text).
-        action_value: Scenario name, full task instruction, or the text to say.
+            uses the LLM) | say (speak/send a text) | briefing (morning summary:
+            weather, schedule, todos, news -- free, no LLM).
+        action_value: Scenario name, full task instruction, the text to say, or
+            for briefing a city (or "сводка" for the home city).
             In a task/say text, {detail} is replaced by what fired it (e.g. the
             new file's path).
         trusted: True only if the user explicitly said the task may act without

@@ -152,3 +152,30 @@ async def read_clipboard(context: RunContext) -> str:
     """Read the current text content of the system clipboard."""
     result = await _read_clipboard()
     return result["message"]
+
+
+@register_impl("write_clipboard")
+@log_call("write_clipboard")
+async def _write_clipboard(*, text: str) -> dict:
+    try:
+        import pyperclip
+    except ImportError:
+        return {"status": "error", "message": "Буфер обмена недоступен: не установлен pyperclip."}
+    try:
+        await asyncio.to_thread(pyperclip.copy, text)
+    except Exception as exc:
+        return {"status": "error", "message": f"Не удалось записать в буфер обмена: {exc}"}
+    return {"status": "ok", "message": f"Скопировал в буфер обмена ({len(text)} символов)."}
+
+
+@register_tool
+@function_tool
+async def write_clipboard(context: RunContext, text: str) -> str:
+    """Put text into the system clipboard so the user can paste it (Ctrl+V):
+    a translation, a drafted reply, a link, a summary of the clipboard, etc.
+
+    Args:
+        text: The exact text to copy.
+    """
+    result = await _write_clipboard(text=text)
+    return result["message"]

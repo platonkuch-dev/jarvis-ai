@@ -1,4 +1,5 @@
 #desktop.py
+import ast
 import os
 import sys
 import shutil
@@ -41,12 +42,17 @@ def _get_desktop() -> Path:
 def _build_sandbox() -> dict:
     import time
 
+    # NOTE: getattr/setattr/vars/globals/locals/type are intentionally left out.
+    # getattr with a dynamic string was the main escape hatch that let generated
+    # code reach dunder attributes (__class__, __globals__, __subclasses__...)
+    # and pivot from there to os/subprocess objects already loaded in this
+    # process — see _validate_code() below for the static half of this fix.
     safe_builtins = {
         "print": print,
         "len": len, "str": str, "int": int, "float": float,
         "bool": bool, "list": list, "dict": dict, "tuple": tuple,
         "range": range, "enumerate": enumerate, "sorted": sorted,
-        "isinstance": isinstance, "hasattr": hasattr, "getattr": getattr,
+        "isinstance": isinstance,
         "max": max, "min": min, "sum": sum, "abs": abs,
         "zip": zip, "map": map, "filter": filter,
     }
@@ -66,13 +72,17 @@ def _build_sandbox() -> dict:
     if _PYAUTOGUI:
         sandbox["pyautogui"] = pyautogui
 
+    # ctypes is deliberately NOT exposed here: it is a direct line to the raw
+    # Windows API (WinExec, CreateProcess, VirtualAlloc...) regardless of what
+    # the prompt tells the model — there is no such thing as "read-only
+    # ctypes". Anything that genuinely needs a Win32 call belongs in a
+    # narrow, explicitly-allowlisted Python function (like set_wallpaper()
+    # below), not a module handed wholesale to generated code.
     if _OS == "Windows":
         try:
-            import ctypes
             import winreg
-            sandbox["ctypes"] = ctypes
             sandbox["winreg"] = type("winreg", (), {
-                # Sadece okuma
+                # Read-only, and only ever HKEY_CURRENT_USER.
                 "OpenKey":      winreg.OpenKey,
                 "QueryValueEx": winreg.QueryValueEx,
                 "HKEY_CURRENT_USER": winreg.HKEY_CURRENT_USER,
@@ -83,6 +93,47 @@ def _build_sandbox() -> dict:
     return sandbox
 
 
+# Names that must never appear as an identifier in generated code: each one is
+# either a way to run arbitrary code/commands, or a way to dynamically reach
+# an attribute whose name the static dunder check below can't see (a string
+# built at runtime, e.g. getattr(x, "__" + "class__")).
+_BLOCKED_NAMES = {
+    "exec", "eval", "compile", "__import__", "open", "input",
+    "getattr", "setattr", "delattr", "vars", "globals", "locals", "type",
+    "breakpoint", "help", "exit", "quit", "memoryview",
+}
+
+
+def _validate_code(code: str) -> str | None:
+    """Static check on the generated code, run before it ever reaches exec().
+
+    This is the actual enforcement of the "Hard rules" in the prompt below —
+    the prompt only asks the model nicely; this function is what makes an
+    import, a dunder-attribute walk (the classic ().__class__.__bases__[0]
+    .__subclasses__() sandbox escape) or a call to exec/eval/getattr/etc.
+    fail closed instead of silently running. Returns an error message if the
+    code is rejected, or None if it looks safe to run in the sandbox.
+    """
+    try:
+        tree = ast.parse(code, mode="exec")
+    except SyntaxError as e:
+        return f"Syntax error: {e}"
+
+    for node in ast.walk(tree):
+        if isinstance(node, (ast.Import, ast.ImportFrom)):
+            return "Import statements are not allowed."
+        if isinstance(node, ast.Attribute) and node.attr.startswith("__") and node.attr.endswith("__"):
+            return f"Access to '{node.attr}' is not allowed."
+        if isinstance(node, ast.Name) and node.id in _BLOCKED_NAMES:
+            return f"Use of '{node.id}' is not allowed."
+        if isinstance(node, ast.Constant) and isinstance(node.value, str):
+            v = node.value
+            if len(v) > 4 and v.startswith("__") and v.endswith("__"):
+                return f"String literal '{v}' referencing a dunder name is not allowed."
+
+    return None
+
+
 def _execute_generated_code(code: str, player=None) -> str:
     if not code or code.strip() == "UNSAFE":
         return "This action cannot be performed safely."
@@ -91,6 +142,11 @@ def _execute_generated_code(code: str, player=None) -> str:
     if code.startswith("```"):
         lines = code.split("\n")
         code  = "\n".join(lines[1:-1]).strip()
+
+    block_reason = _validate_code(code)
+    if block_reason:
+        print(f"[Desktop] Blocked unsafe generated code: {block_reason}\nCode:\n{code[:300]}")
+        return f"This action was blocked for safety: {block_reason}"
 
     sandbox      = _build_sandbox()
     output_lines = []
@@ -110,7 +166,7 @@ def _ask_gemini_for_desktop_action(task: str) -> str:
 
     os_specific = ""
     if _OS == "Windows":
-        os_specific = "- ctypes (Windows API calls, read-only)\n- winreg (registry READ only)"
+        os_specific = "- winreg (registry READ only, HKEY_CURRENT_USER)"
     elif _OS == "Darwin":
         os_specific = "- subprocess is NOT available; use pyautogui or Path only"
     else:
@@ -132,10 +188,14 @@ Allowed modules ONLY:
 Hard rules:
 - NO file deletion (no unlink, no rmtree, no remove)
 - NO subprocess calls
-- NO exec() or eval() inside the code
+- NO exec(), eval(), compile(), getattr(), setattr(), or __import__()
+- NO attribute names starting and ending with "__" (e.g. __class__, __globals__, __subclasses__)
 - NO import statements (modules are pre-injected)
 - NO file write operations except explicitly requested
 - If task cannot be done safely with these tools, output exactly: UNSAFE
+
+Any of the above will be rejected automatically before your code runs — writing around them will simply
+fail, not execute.
 
 Output ONLY the Python code. No explanation, no markdown, no backticks.
 

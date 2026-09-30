@@ -1,0 +1,15 @@
+@import url('https://fonts.googleapis.com/css2?family=IBM+Plex+Mono:wght@500&family=Manrope:wght@600;800&family=Sora:wght@400;700;800&display=swap');
+*{box-sizing:border-box;margin:0;padding:0}
+html,body{width:1280px;height:769px;overflow:hidden}
+body{background:#05070d;color:#e6ebf5;font-family:'Sora','Manrope',sans-serif;position:relative}
+.bg{position:absolute;inset:0;background:
+ radial-gradient(60% 70% at 78% 45%,rgba(99,102,241,.38),transparent 70%),
+ radial-gradient(40% 50% at 20% 100%,rgba(34,211,238,.18),transparent 70%),#05070d}
+.grid{position:absolute;inset:0;background-image:linear-gradient(rgba(255,255,255,.035) 1px,transparent 1px),linear-gradient(90deg,rgba(255,255,255,.035) 1px,transparent 1px);background-size:64px 64px;mask-image:radial-gradient(80% 80% at 60% 50%,#000,transparent)}
+.copy{position:absolute;left:80px;top:0;bottom:0;width:640px;display:flex;flex-direction:column;justify-content:center;gap:26px}
+.tag{font:500 20px 'IBM Plex Mono',monospace;letter-spacing:.16em;color:#22d3ee;text-transform:uppercase}
+h1{font-size:92px;line-height:1.02;letter-spacing:-.035em;font-weight:800}
+h1 span{background:linear-gradient(100deg,#22d3ee,#6366f1 60%,#a78bfa);-webkit-background-clip:text;background-clip:text;color:transparent}
+p.sub{font-size:31px;line-height:1.35;color:#9aa5b8;font-weight:400}
+.chips{display:flex;gap:14px;flex-wrap:wrap;margin-top:8px}
+.chips b{font:500 22px 'IBM Plex Mono',monospace;color:#e6ebf5;padding:11px 20px;border:1.5px solid rgba(34,211,238,.45);border-radius:999px;background:rgba(34,211,238,.08)}

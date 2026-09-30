@@ -1,6 +1,6 @@
 """Entrypoint for the voice agent worker.
 
-Pipeline: Deepgram Nova-3 (STT) -> Claude Haiku (LLM) -> edge-tts (TTS),
+Pipeline: Deepgram Nova-3 (STT) -> Claude Haiku / Claude Code CLI / local Ollama model (LLM) -> TTS,
 gated by Silero VAD. Run with:
 
     python worker.py dev      # connect to LiveKit Playground / a dev room
@@ -16,6 +16,8 @@ import logging
 import sys
 
 from dotenv import load_dotenv
+
+import screens  # noqa: F401  (per-monitor DPI awareness before anything imports pyautogui)
 from livekit.agents import (
     Agent,
     AgentSession,
@@ -31,14 +33,16 @@ from livekit.plugins import anthropic, deepgram, elevenlabs, openai as openai_pl
 import config
 import fast_path
 import hud_bridge
+import memes
 import notify
+import pc_guard
 import prompts
 import usage
 from custom_tts import TTS as EdgeTTS
 from sleep_wake import SleepWakeController
 from tools import FUNCTION_TOOLS
 from tools import runtime as tool_runtime
-from tools import scheduling, tasks, triggers
+from tools import scheduling, shell, tasks, triggers, web
 from tools.memory import load_memory
 
 load_dotenv()
@@ -49,6 +53,15 @@ logger = logging.getLogger("jarvis-voice-agent")
 # a `dev`/`start` job may be serving a remote browser with nobody at this
 # keyboard, so the wake hotkey / auto-sleep are console-mode only.
 IS_CONSOLE_MODE = "console" in sys.argv
+
+if IS_CONSOLE_MODE and config.HUD_FACE:
+    # Feeds the HUD face's lips from the audio actually being played.
+    import lipsync_bridge
+
+    lipsync_bridge.install_console_tap()
+
+# Strong refs for fire-and-forget tasks (asyncio keeps only weak ones).
+_BACKGROUND_REFS: set[asyncio.Task] = set()
 
 
 _RESTRICTED_CALLER_NOTE = """
@@ -68,9 +81,11 @@ class JarvisAgent(Agent):
         self._restricted = restricted
 
     async def on_enter(self) -> None:
-        self.session.generate_reply(
-            instructions="Поздоровайся коротко и представься как голосовой помощник Джарвис."
-        )
+        if config.JARVIS_PERSONA == "roast" and not self._restricted:
+            greeting = "Поздоровайся одной короткой фразой в своём характере, с лёгким подколом владельца."
+        else:
+            greeting = "Поздоровайся коротко и представься как голосовой помощник Джарвис."
+        self.session.generate_reply(instructions=greeting)
 
     async def on_user_turn_completed(self, turn_ctx: llm.ChatContext, new_message: llm.ChatMessage) -> None:
         """Handles the most common one-shot commands locally (fast_path.py),
@@ -82,6 +97,12 @@ class JarvisAgent(Agent):
                                     kind="phone")
             return
         text = new_message.text_content or ""
+        # A "да"/"нет" to a dangerous step pc_guard is holding back: record it
+        # and tell the model, instead of letting the fast path near it.
+        guard_note = pc_guard.note_user_reply(text)
+        if guard_note is not None:
+            new_message.content.append(guard_note)
+            return
         from tools import computer_use
 
         intent = fast_path.parse(text, computer_use_running=computer_use._RUN_LOCK.locked())
@@ -98,6 +119,26 @@ class JarvisAgent(Agent):
         await self.update_chat_ctx(chat_ctx)
         self.session.say(reply)
         raise llm.StopResponse()
+
+    async def llm_node(self, chat_ctx, tools, model_settings):
+        # A local model's context is 16k and the prompt + tool schemas take
+        # ~13k of it; past that, Ollama silently cuts from the *front* -- the
+        # system prompt goes first. Keep only the recent turns (the system
+        # message is always kept, so the cached prompt prefix still hits).
+        if config.LLM_PROVIDER == "ollama":
+            chat_ctx = chat_ctx.copy().truncate(max_items=config.OLLAMA_MAX_HISTORY_ITEMS)
+        async for chunk in Agent.default.llm_node(self, chat_ctx, tools, model_settings):
+            yield chunk
+
+    async def tts_node(self, text, model_settings):
+        # [смех] / [мем: ...] tags in the reply become real audio clips,
+        # spliced into the speech stream at the spot the model put them.
+        async for frame in memes.tts_with_sfx(self, text, model_settings):
+            yield frame
+
+    async def transcription_node(self, text, model_settings):
+        async for delta in memes.strip_transcription(text):
+            yield delta
 
 
 def prewarm(proc: JobProcess) -> None:
@@ -117,7 +158,34 @@ def _persisted_voice_id() -> str | None:
         return None
 
 
-def _build_llm():
+def _build_llm(instructions: str = "", *, mcp_server=None, restricted: bool = False):
+    if config.LLM_PROVIDER == "claude_code":
+        # The local Claude Code CLI, on the Claude.ai subscription it is
+        # logged into (see claude_code_llm.py). Jarvis's tools reach it over
+        # MCP; an untrusted phone caller gets no tools at all.
+        from claude_code_llm import ClaudeCodeLLM
+
+        return ClaudeCodeLLM(
+            system_prompt=instructions,
+            mcp_config=mcp_server.mcp_config() if mcp_server is not None else None,
+            restricted=restricted,
+            persist_session=IS_CONSOLE_MODE,
+        )
+    if config.LLM_PROVIDER == "ollama":
+        # Local model via Ollama's OpenAI-compatible endpoint: free, no
+        # network hop. parallel_tool_calls off -- small local models get
+        # noticeably sloppier when asked to emit several calls at once.
+        # reasoning_effort="none": Qwen3 otherwise "thinks" 150-300 hidden
+        # tokens before every reply (~2-3 s of silence on a 5070; measured).
+        # A "/no_think" prompt switch did NOT stop it on Ollama 0.33 -- only
+        # this request field does.
+        return openai_plugin.LLM.with_ollama(
+            model=config.OLLAMA_MODEL,
+            base_url=config.OLLAMA_BASE_URL,
+            temperature=config.OLLAMA_TEMPERATURE,
+            parallel_tool_calls=False,
+            reasoning_effort=config.OLLAMA_REASONING_EFFORT,
+        )
     if config.LLM_PROVIDER == "openai":
         from openai.types import Reasoning
 
@@ -150,6 +218,25 @@ def _build_llm():
     return anthropic.LLM(model=config.ANTHROPIC_MODEL, _strict_tool_schema=False, caching="ephemeral")
 
 
+async def _pin_ollama_model() -> None:
+    """Load the local model into VRAM now and keep it there (keep_alive=-1):
+    otherwise Ollama unloads it after 5 idle minutes and the next question
+    waits several seconds for a reload."""
+    import aiohttp
+
+    root = config.OLLAMA_BASE_URL.rstrip("/").removesuffix("/v1")
+    try:
+        async with aiohttp.ClientSession() as http:
+            async with http.post(f"{root}/api/generate", json={"model": config.OLLAMA_MODEL, "keep_alive": -1},
+                                 timeout=aiohttp.ClientTimeout(total=120)) as resp:
+                if resp.status != 200:
+                    logger.warning("ollama could not load %s: %s", config.OLLAMA_MODEL, await resp.text())
+                else:
+                    logger.info("ollama model %s loaded and pinned", config.OLLAMA_MODEL)
+    except Exception:
+        logger.warning("ollama is not reachable at %s -- is it running?", root, exc_info=True)
+
+
 def _build_tts():
     if config.TTS_PROVIDER == "elevenlabs":
         # api_key passed explicitly: the plugin's own env fallback is
@@ -179,6 +266,9 @@ def _build_tts():
 async def entrypoint(ctx: JobContext) -> None:
     ctx.log_context_fields = {"room": ctx.room.name}
 
+    if config.LLM_PROVIDER == "ollama":
+        _BACKGROUND_REFS.add(asyncio.create_task(_pin_ollama_model(), name="ollama-pin"))
+
     if config.SYSTEM == "Windows":
         try:
             from adobe_cep_bridge import installer as adobe_cep_installer
@@ -207,11 +297,36 @@ async def entrypoint(ctx: JobContext) -> None:
             logger.info("phone call from %s -- %s", caller or "unknown number",
                         "conversation only" if restricted else "trusted, full tools")
 
+    if restricted:
+        agent = JarvisAgent(prompts.SYSTEM_PROMPT + _RESTRICTED_CALLER_NOTE, restricted=True)
+    else:
+        agent = JarvisAgent(prompts.build_instructions(await load_memory()))
+
+    mcp_server = None
+    session_kwargs = {}
+    if config.LLM_PROVIDER == "claude_code":
+        if not restricted:
+            from jarvis_mcp import JarvisMCPServer
+
+            # run_powershell / read_webpage are for the other brains: claude has
+            # its own PowerShell (judged by the same pc_guard through
+            # permission_gate) and WebFetch.
+            own_equivalent = {shell.run_powershell, web.read_webpage}
+            mcp_server = JarvisMCPServer([t for t in FUNCTION_TOOLS if t not in own_equivalent],
+                                         extra=[pc_guard.gate_tool()])
+            await mcp_server.start()
+            ctx.add_shutdown_callback(mcp_server.aclose)
+        # Preemptive generation starts a reply on an interim transcript and
+        # throws it away if the final one differs -- fine for a stateless
+        # API, but here every start is a real message in claude's history.
+        session_kwargs["turn_handling"] = {"preemptive_generation": {"enabled": False}}
+
     session: AgentSession = AgentSession(
         stt=deepgram.STT(model=config.DEEPGRAM_MODEL, language=config.DEEPGRAM_LANGUAGE),
-        llm=_build_llm(),
+        llm=_build_llm(agent.instructions, mcp_server=mcp_server, restricted=restricted),
         tts=_build_tts(),
         vad=ctx.proc.userdata["vad"],
+        **session_kwargs,
     )
 
     async def _log_usage() -> None:
@@ -222,7 +337,7 @@ async def entrypoint(ctx: JobContext) -> None:
     @session.on("metrics_collected")
     def _on_metrics(ev) -> None:
         m = ev.metrics
-        if getattr(m, "type", None) == "llm_metrics":
+        if getattr(m, "type", None) == "llm_metrics" and config.LLM_PROVIDER not in ("ollama", "claude_code"):
             # prompt_tokens already includes the cached part; split it back out
             # so cache reads/writes are priced at their real (lower/higher) rates.
             cached, written = m.prompt_cached_tokens or 0, getattr(m, "cache_creation_tokens", 0) or 0
@@ -254,14 +369,12 @@ async def entrypoint(ctx: JobContext) -> None:
         text = getattr(ev.item, "text_content", None)
         if role is None or not text:
             return
+        text = memes.strip_tags(text)
+        if not text:
+            return
         hud_lines.append({"role": role, "text": text})
         if role == "user":
             hud_bridge.write_state("thinking", hud_lines)
-
-    if restricted:
-        agent = JarvisAgent(prompts.SYSTEM_PROMPT + _RESTRICTED_CALLER_NOTE, restricted=True)
-    else:
-        agent = JarvisAgent(prompts.build_instructions(await load_memory()))
 
     if IS_CONSOLE_MODE:
         await ctx.connect()

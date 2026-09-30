@@ -41,7 +41,8 @@ Fast Router (voice/fast_router.py — regex match against known simple
 | `wake_word.py` | Always-on "Hey Jarvis" detection, openWakeWord, ~4MB ONNX models |
 | `vad.py` | End-of-speech detection after the wake word fires (Silero VAD) |
 | `stt.py` | faster-whisper wrapper, GPU-accelerated, loaded once and kept resident |
-| `tts.py` | `TTSProvider` protocol + `MmsTtsProvider` (facebook/mms-tts-rus) |
+| `tts.py` | `TTSProvider` protocol + `PiperTtsProvider` (default, standalone binary) + `MmsTtsProvider` (GPU fallback) |
+| `piper_bin/` | Standalone Piper binary + espeak-ng-data + `ru_RU-ruslan-medium` voice model |
 | `fast_router.py` | Regex command matcher -> direct tool dispatch, zero LLM involvement |
 | `intent_classifier.py` | MiniLM (paraphrase-multilingual-MiniLM-L12-v2) fuzzy fallback for zero-arg intents the regex router misses |
 | `pipeline.py` | Ties the four models together; owns model lifecycle, not the mic stream |
@@ -80,21 +81,49 @@ trade-off, not a bug: a slower correct answer beats a fast wrong one.
   drops noticeably) or "medium"/"large" (real per-utterance latency cost).
   Verified independently: a full natural Russian sentence transcribed
   *perfectly* in a round-trip test.
-- **TTS**: `facebook/mms-tts-rus` via HuggingFace transformers — **not** the
-  first two choices tried:
-  - `piper-tts` (1.7.0 and 1.6.1) has a reproducible **upstream Windows
-    packaging bug**: the compiled `espeakbridge` extension ignores the
-    `espeak_data_dir` argument passed from Python and looks for phoneme
-    data at a hardcoded CI build path
+- **TTS**: `PiperTtsProvider` — a standalone Piper binary (`voice/piper_bin/`,
+  ~98MB, checked into the project) running the `ru_RU-ruslan-medium` voice.
+  CPU-only ONNX inference, no GPU needed, measured real-time factor ~0.04
+  (25x faster than real-time). Three engines were tried before this worked:
+  - `piper-tts` the **pip package** (1.7.0 and 1.6.1) has a reproducible
+    **upstream Windows packaging bug**: the compiled `espeakbridge`
+    extension ignores the `espeak_data_dir` argument passed from Python and
+    looks for phoneme data at a hardcoded CI build path
     (`D:/a/piper1-gpl/piper1-gpl/_skbuild/.../espeak-ng-data`) that doesn't
-    exist on any real machine. Not fixable from this codebase.
+    exist on any real machine.
+  - The fix: Piper also ships a **standalone binary release**
+    (`github.com/rhasspy/piper`, tag `2023.11.14-2`) that bundles its own
+    `espeak-ng-data` alongside `piper.exe` — no Python bridge involved, no
+    hardcoded path. This works. One more real bug found getting there: the
+    bundled onnxruntime/espeak-ng DLLs crash instantly
+    (`STATUS_STACK_BUFFER_OVERRUN`, no stderr) if the model/espeak-data
+    paths are passed as **absolute** paths — this project's absolute path
+    contains Cyrillic characters and parentheses
+    (`...Mark-XLVIII-main (2)...`). Passing them as paths relative to `cwd`
+    (with only the executable itself given an absolute path, since Windows
+    won't resolve a bare relative exe name against `cwd` the way a shell
+    does) fixed it — see `PiperTtsProvider.synthesize()` for the working
+    invocation.
   - Silero TTS (`torch.hub.load('snakers4/silero-models', ...)`) hosts its
     model weights at `models.silero.ai`, which is **network-unreachable**
-    from this machine (confirmed via a direct `curl` — connection timeout,
-    not a code issue).
-  - `mms-tts-rus` is hosted on `huggingface.co` (confirmed reachable — the
-    same host faster-whisper already pulls from), loads in ~7s, and
-    synthesizes at roughly 10x real-time on an RTX 5070.
+    from this machine (confirmed via a direct `curl` — connection timeout —
+    and re-confirmed months later, so not a fluke). A community mirror of
+    the v3 Russian model exists on HuggingFace
+    (`imperialwool/silero-model-v3-ru`) and does load/synthesize correctly,
+    but its voice set (aidar, baya, kseniya, xenia, eugene) wasn't the one
+    picked in the end.
+  - `facebook/mms-tts-rus` via HuggingFace transformers was the working
+    default for a while (GPU-accelerated, ~10x real-time on an RTX 5070) —
+    still available as `MmsTtsProvider` if Piper ever needs to be swapped
+    back out.
+  - A `stop()`-during-synthesis bug was found and fixed while testing this
+    switch: both TTS providers cleared their stop event *after*
+    `synthesize()` returned, so a `stop()` call arriving while synthesis was
+    still in flight got silently discarded once playback started. Piper's
+    per-call subprocess synthesis is slower than MMS's in-process GPU call,
+    which is what actually exposed the race in a real timing test. Fixed by
+    clearing the event before `synthesize()` and checking it again right
+    after, before starting playback.
 
 ## Installing
 
@@ -159,7 +188,25 @@ playback) — Gemini never sees that utterance's audio, so it can't
 double-handle the same command. On no match anywhere in the ladder, the
 already-transcribed text is forwarded to the existing `_on_text_command()`
 path, the same mechanism the dashboard and Telegram relays use, so Gemini's
-reasoning and its own audio-out TTS handle it exactly as before.
+reasoning handles it exactly as before.
+
+**Smart Path voice, however, now comes from local Piper too** — not
+Gemini's own audio-out. `response_modalities` stays `AUDIO` (Gemini still
+generates and streams native speech, unchanged — this keeps server-side
+VAD/barge-in detection and Telegram's voice-reply feature, both of which
+depend on that native audio stream, working exactly as before), but
+`core/audio_pipeline.py`'s `play_audio()` no longer sends that native audio
+to the speaker. Instead, `receive_audio()` segments the streaming
+`output_transcription` text into complete sentences as they arrive
+(`_extract_complete_sentences()`) and pushes each one onto a queue that a
+new task, `speak_piper_queue()`, consumes — speaking sentence-by-sentence
+via local Piper as soon as each one is ready, not after the whole response
+finishes generating. This is what now drives `set_speaking()`/mic-gating
+for the Smart Path (`play_audio()` no longer does). `interrupt()` (manual
+Esc, or Gemini's own server-side barge-in detection) drains any
+not-yet-spoken sentences and calls `PiperTtsProvider.stop()` to cut
+in-progress playback immediately — reuses the exact same barge-in mechanism
+already built and tested for the Fast Path.
 
 Verified live against the running app: `[Latency] tool=fast_path_wake_word`
 / `tool=stt` / `tool=fast_path_passthrough` entries appear in production

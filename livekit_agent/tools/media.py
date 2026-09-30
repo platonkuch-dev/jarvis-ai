@@ -70,3 +70,74 @@ async def media_control(context: RunContext, action: MediaAction, value: int | N
     """
     result = await _media_control(action=action, value=value)
     return result["message"]
+
+
+# ---------------------------------------------------------------------------
+# play_music: find a track/video by name and start it
+# ---------------------------------------------------------------------------
+
+MusicService = Literal["youtube", "spotify", "yandex"]
+
+
+def _first_youtube_url(query: str) -> str | None:
+    try:
+        from ddgs import DDGS
+    except ImportError:
+        from duckduckgo_search import DDGS  # type: ignore[no-redef]
+
+    with DDGS() as ddgs:
+        for r in ddgs.videos(query, max_results=8):
+            url = r.get("content") or r.get("url") or ""
+            if "youtube.com/watch" in url or "youtu.be/" in url:
+                return url
+    return None
+
+
+def _open(target: str) -> None:
+    import os
+    import webbrowser
+
+    if SYSTEM == "Windows" and not target.startswith("http"):
+        os.startfile(target)  # type: ignore[attr-defined]  # spotify: URIs go to the app
+    else:
+        webbrowser.open(target)
+
+
+@register_impl("play_music")
+@log_call("play_music")
+async def _play_music(*, query: str, service: str = "youtube") -> dict:
+    from urllib.parse import quote
+
+    query = query.strip()
+    if not query:
+        return {"status": "error", "message": "Скажите, что включить."}
+    try:
+        if service == "spotify":
+            await asyncio.to_thread(_open, f"spotify:search:{quote(query)}")
+            return {"status": "ok", "message": f"Открыл поиск «{query}» в Spotify."}
+        if service == "yandex":
+            await asyncio.to_thread(_open, f"https://music.yandex.ru/search?text={quote(query)}")
+            return {"status": "ok", "message": f"Открыл «{query}» в Яндекс Музыке."}
+        url = await asyncio.to_thread(_first_youtube_url, query)
+        if url is None:
+            await asyncio.to_thread(_open, f"https://www.youtube.com/results?search_query={quote(query)}")
+            return {"status": "ok", "message": f"Точного видео не нашёл, открыл поиск «{query}» на YouTube."}
+        await asyncio.to_thread(_open, url)
+        return {"status": "ok", "message": f"Включаю «{query}» на YouTube.", "url": url}
+    except Exception as exc:
+        return {"status": "error", "message": f"Не удалось включить музыку: {exc}"}
+
+
+@register_tool
+@function_tool
+async def play_music(context: RunContext, query: str, service: MusicService = "youtube") -> str:
+    """Play a song, artist, playlist or video by name ("включи Imagine Dragons",
+    "поставь lo-fi для работы"). YouTube starts the best match right away;
+    Spotify / Yandex open the search for it. For pause/next use media_control.
+
+    Args:
+        query: What to play, e.g. "Rammstein Sonne" or "музыка для концентрации".
+        service: "youtube" (default), "spotify" or "yandex" -- only if the user named it.
+    """
+    result = await _play_music(query=query, service=service)
+    return result["message"]

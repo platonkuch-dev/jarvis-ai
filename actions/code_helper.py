@@ -4,7 +4,7 @@ import re
 import time
 from pathlib import Path
 
-from core.config import CLAUDE_MODEL, CLAUDE_THINKING_BUDGET as THINKING_BUDGET, CLAUDE_THINKING_MAX_TOKENS as THINKING_MAX_TOKENS
+from core.config import CLAUDE_MODEL, CLAUDE_THINKING_MAX_TOKENS as THINKING_MAX_TOKENS
 from core.runtime_config import get_config as _get_config, build_anthropic_client as _build_anthropic_client
 
 DESKTOP            = Path.home() / "Desktop"
@@ -31,7 +31,12 @@ def _generate(prompt: str, provider: str = "claude", thinking: bool = False) -> 
         client = _build_anthropic_client()
         kwargs = {}
         if thinking:
-            kwargs["thinking"]  = {"type": "enabled", "budget_tokens": THINKING_BUDGET}
+            # CLAUDE_MODEL (core/config.py) no longer accepts the old
+            # thinking.type="enabled"+budget_tokens shape -- the API now
+            # requires type="adaptive" with the effort level set via the
+            # separate top-level output_config param instead.
+            kwargs["thinking"] = {"type": "adaptive"}
+            kwargs["output_config"] = {"effort": "high"}
             kwargs["max_tokens"] = THINKING_MAX_TOKENS
         else:
             kwargs["max_tokens"] = 8192

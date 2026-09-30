@@ -58,6 +58,7 @@ from core import runtime_config, latency
 from voice.pipeline import VoicePipeline
 from voice.intent_classifier import IntentClassifier
 from memory.memory_manager import load_memory, format_memory_for_prompt
+from core.assistant_state import get_state
 from core.config import GEMINI_LIVE_MODEL as LIVE_MODEL, GEMINI_VOICE_NAME
 
 from actions.system_monitor    import SystemMonitor
@@ -81,8 +82,12 @@ from core.session import (
 # the Stage 2 module split (see REWORK_PLAN.md). JarvisLive keeps thin
 # `_foo` wrapper methods that delegate into these.
 from core import audio_pipeline, fast_path, tool_dispatch, tool_registry
+from core.hotkey import GlobalHotkey
+from core import local_llm
+from core import routine_bridge
 from core import system_monitor_bridge, dashboard_bridge, telegram_bridge
 from core.audio_pipeline import CHANNELS, SEND_SAMPLE_RATE, RECEIVE_SAMPLE_RATE, CHUNK_SIZE
+from core.idle_watchdog import run_idle_watchdog, IntentionalIdleClose
 
 
 BASE_DIR        = Path(__file__).resolve().parent
@@ -136,6 +141,102 @@ TOOL_DECLARATIONS = [
         "parameters": {
             "type": "OBJECT",
             "properties": {},
+        }
+    },
+    {
+        "name": "system_scan",
+        "description": (
+            "Runs a real Microsoft Defender antivirus scan. Use when the user says "
+            "scan the system, check for viruses, scan for malware, or asks whether "
+            "their computer is infected. Default to a quick scan; use scan_type='full' "
+            "only when the user explicitly requests a complete/full scan."
+        ),
+        "parameters": {
+            "type": "OBJECT",
+            "properties": {
+                "scan_type": {"type": "STRING", "description": "quick (default) | full"}
+            },
+            "required": []
+        }
+    },
+    {
+        "name": "system_diagnostics",
+        "description": "Checks local computer health: CPU, RAM, GPU, disk space, uptime and processes. Use when the user asks to check, diagnose or optimize their computer.",
+        "parameters": {"type": "OBJECT", "properties": {}, "required": []}
+    },
+    {
+        "name": "process_hunter",
+        "description": (
+            "Scans all running processes for suspicious activity: unsigned "
+            "executables, processes running from Temp/Downloads, unusually high "
+            "CPU or RAM use, and open network connections. Use when the user asks "
+            "to find suspicious/malicious processes, check what's running, hunt "
+            "for malware, or investigate resource hogs. Read-only — reports "
+            "findings, does not kill or modify anything."
+        ),
+        "parameters": {
+            "type": "OBJECT",
+            "properties": {
+                "limit": {"type": "NUMBER", "description": "Max number of findings to report (default 10)"}
+            },
+            "required": []
+        }
+    },
+    {
+        "name": "hacker_terminal",
+        "description": (
+            "Executes an arbitrary PowerShell or CMD command on the user's computer "
+            "and returns its output. This is unrestricted — there is no command "
+            "whitelist — and runs immediately, no confirmation needed."
+        ),
+        "parameters": {
+            "type": "OBJECT",
+            "properties": {
+                "command":     {"type": "STRING", "description": "The exact PowerShell or CMD command to run"},
+                "shell":       {"type": "STRING", "description": "powershell (default) or cmd"},
+                "working_dir": {"type": "STRING", "description": "Optional working directory (default: user's home folder)"},
+                "timeout":     {"type": "NUMBER", "description": "Optional timeout in seconds (default 30, max 120)"},
+            },
+            "required": ["command"]
+        }
+    },
+    {
+        "name": "digital_ghost",
+        "description": (
+            "Queries JARVIS's background system baseline (Digital Ghost): a "
+            "continuously updated snapshot of processes, files in watched "
+            "folders, startup/persistence entries, services, network "
+            "destinations, DNS lookups, USB/PnP devices, installed "
+            "applications, and system event log entries. Use action='delta' "
+            "when the user asks what changed on their PC recently (e.g. "
+            "'what changed in the last 6 hours', 'what's new since this "
+            "morning', 'did anything change after I installed X') — set "
+            "'hours' to match what they asked for. Use action='status' when "
+            "they ask whether Ghost/the baseline monitor is running or how "
+            "much it's tracking. Read-only, makes no changes."
+        ),
+        "parameters": {
+            "type": "OBJECT",
+            "properties": {
+                "action": {"type": "STRING", "description": "delta (default) | status"},
+                "hours":  {"type": "NUMBER", "description": "For action=delta: how many hours back to compare (default 6)"},
+            },
+            "required": []
+        }
+    },
+    {
+        "name": "jarvis_control",
+        "description": "Manages JARVIS tasks, privacy permissions, focus mode, response style, saved routines and activity history. Use it whenever the user asks to create/list/complete/cancel a task, change a privacy permission, enable/disable focus mode, change response detail, save/run/list/delete a routine, or view activity.",
+        "parameters": {
+            "type": "OBJECT",
+            "properties": {
+                "action": {"type": "STRING", "description": "status | task_list | task_add | task_complete | task_cancel | privacy_get | privacy_set | focus_on | focus_off | focus_status | voice_set | qwen_on | qwen_off | qwen_status | power_on | power_off | power_status | routine_list | routine_save | routine_run | routine_schedule | routine_delete | activity"},
+                "value": {"type": "STRING", "description": "Task title, privacy permission, focus end time, voice style (brief|balanced|detailed), or routine instruction."},
+                "id": {"type": "STRING", "description": "Task or routine id for complete, cancel, run or delete."},
+                "name": {"type": "STRING", "description": "Routine name when saving a routine."},
+                "enabled": {"type": "BOOLEAN", "description": "Allow or block a privacy permission."}
+            },
+            "required": ["action"]
         }
     },
     {
@@ -270,7 +371,10 @@ TOOL_DECLARATIONS = [
             "Controls the computer: volume, brightness, window management, keyboard shortcuts, "
             "typing text on screen, closing apps, fullscreen, dark mode, WiFi, restart, shutdown, "
             "scrolling, tab management, zoom, screenshots, lock screen, refresh/reload page. "
-            "Use for ANY single computer control command."
+            "Use for ANY single computer control command. Every action runs immediately with no "
+            "confirmation EXCEPT shutdown, which is gated -- your first shutdown call returns a "
+            "confirmation prompt instead of running; only call it again with confirmed=true after "
+            "the user clearly says yes."
         ),
         "parameters": {
             "type": "OBJECT",
@@ -418,6 +522,29 @@ TOOL_DECLARATIONS = [
                 "path":        {"type": "STRING",  "description": "Save path for screenshot"},
             },
             "required": ["action"]
+        }
+    },
+    {
+        "name": "computer_agent",
+        "description": (
+            "Autonomous agent that carries out a WHOLE multi-step goal on the computer by "
+            "looking at the screen and clicking/typing until it is done: registering on a "
+            "website, filling in forms, configuring an app, navigating settings, working "
+            "through a slow game menu. Use it when the task needs several UI steps you "
+            "can't do with one call. For a single click/keypress use computer_control. "
+            "It cannot pass CAPTCHAs or SMS/e-mail codes: if the result starts with "
+            "[NEEDS_USER], tell the user what they must do on screen, and after they are "
+            "done call computer_agent again with the same goal. action=stop aborts a run."
+        ),
+        "parameters": {
+            "type": "OBJECT",
+            "properties": {
+                "goal":        {"type": "STRING",  "description": "What to achieve, in plain language, with every detail the agent needs (site, names, options)."},
+                "max_steps":   {"type": "INTEGER", "description": "Action budget (default 25, max 60)"},
+                "max_seconds": {"type": "NUMBER",  "description": "Time budget in seconds (default 300)"},
+                "action":      {"type": "STRING",  "description": "Set to 'stop' to abort a running task. Omit to start one."},
+            },
+            "required": []
         }
     },
     {
@@ -627,15 +754,40 @@ TOOL_DECLARATIONS = [
             "required": ["category", "key", "value"]
         }
     },
+    {
+        "name": "add_capability",
+        "description": (
+            "Writes and adds a brand-new capability to JARVIS itself, using Claude, based on what the "
+            "user describes wanting (e.g. 'add Spotify control', 'make yourself able to track a stock price'). "
+            "Runs immediately, no confirmation needed. The new capability becomes usable starting next time, "
+            "not this turn -- mention that in plain, conversational terms, don't list code or permissions formally."
+        ),
+        "parameters": {
+            "type": "OBJECT",
+            "properties": {
+                "description": {"type": "STRING", "description": "Plain description of the capability to add, in the user's own words"},
+            },
+            "required": ["description"]
+        }
+    },
 ]
 
-# Appends a `confirmed` boolean parameter to every tool's schema above, so
-# Gemini has somewhere to signal a user-confirmed retry of a SENSITIVE/
-# DANGEROUS action -- see core/tool_registry.py for the full risk model and
-# why both levels (not just DANGEROUS) are gated.
+# Retain the optional `confirmed` schema field for compatibility with older
+# Gemini prompts; this installation does not require confirmations.
 tool_registry.add_confirmation_param(TOOL_DECLARATIONS)
 
 # --- Plugin system ---
+# Self-authored capabilities (actions/self_extend.py's add_capability tool)
+# from a previous session -- reload them now so they're usable again
+# without regenerating, before the first Gemini connect ever reads
+# TOOL_DECLARATIONS. Read-only + in-memory registration, safe at import
+# time (see core/custom_tools.py); one bad file is skipped, not fatal.
+try:
+    from core import custom_tools as _custom_tools
+    _custom_tools.set_tool_declarations(TOOL_DECLARATIONS)
+    _custom_tools.reload_persisted_tools()
+except Exception as e:
+    print(f"[CustomTools] Failed to reload self-authored tools: {e}")
 
 
 class JarvisLive:
@@ -664,6 +816,8 @@ class JarvisLive:
         self._turn_measured          = True   # False from new user speech until the model's first reply signal
         self._tool_reaction_measured = True   # False from send_tool_response() until the model's first reply signal
         self._tool_response_sent_at: float | None = None
+        self._audio_response_received_at: float | None = None
+        self._speaker_start_pending = False
         self.ui.on_text_command   = self._on_text_command
         self.ui.on_remote_clicked = self._make_remote_key
         self.ui.on_interrupt      = self.interrupt
@@ -675,6 +829,16 @@ class JarvisLive:
         self._sys_monitor      = SystemMonitor()  # persistent cooldown state
         self._proactive        = ProactiveEngine()
         self._last_user_speech = time.monotonic()  # updated on every user utterance
+
+        # Wake-word gate — the app starts silent (no Gemini connection, no
+        # HUD) with only the local wake-word detector running; the first
+        # utterance that reaches _on_text_command while gated becomes the
+        # opening line of a new session. Cleared once connected, re-armed
+        # by core/idle_watchdog.py after a period of silence. See
+        # REWORK_PLAN.md-style module docs in core/idle_watchdog.py.
+        self._require_wake_word: bool = True
+        self._wake_event = asyncio.Event()
+        self._pending_wake_text: str | None = None
 
         # Fast Path — local wake word + STT + regex router + local TTS, so
         # simple commands ("open Telegram", "volume 30") execute without a
@@ -691,6 +855,11 @@ class JarvisLive:
         # the Smart Path, catching paraphrases regex is too literal to match
         # (e.g. "подними звук"). Zero-arg intents only; see intent_classifier.py.
         self._intent_classifier   = IntentClassifier()
+        self._hotkey: GlobalHotkey | None = None
+
+    def _on_system_scan_status(self, stage: str, message: str) -> None:
+        if stage in {"COMPLETE", "THREATS", "ERROR"}:
+            self.speak(message)
 
     def _make_remote_key(self):
         """Called from Qt main thread when user presses Remote Control."""
@@ -705,8 +874,33 @@ class JarvisLive:
         manual = self._dashboard.get_manual_url()
         return url, key, f"{url}/auto-login?key={key}", manual
 
+    def _trigger_wake(self, text: str) -> bool:
+        """Wake run()'s connect-gate with `text` as the opening line, if
+        currently gated; no-op otherwise. Loop-thread only -- off-loop
+        callers (e.g. _on_text_command, invoked from Qt/worker threads via
+        main_window.py's bare threading.Thread(...) calls) must go through
+        self._loop.call_soon_threadsafe(self._trigger_wake, text) instead
+        of calling this directly.
+
+        Returns True if `text` was consumed as the new session's opening
+        line (run() will send it once connected) -- callers that would
+        otherwise separately send `text` themselves once a session exists
+        (dashboard_bridge.py, telegram_bridge.py) MUST skip that send when
+        this returns True, or the opener gets sent twice."""
+        if self._require_wake_word and not self.session:
+            self._pending_wake_text = text
+            self._wake_event.set()
+            return True
+        return False
+
     def _on_text_command(self, text: str):
-        if not self._loop or not self.session:
+        if not self._loop:
+            return
+        if not self.session:
+            if self._require_wake_word:
+                self._loop.call_soon_threadsafe(self._trigger_wake, text)
+                return
+            asyncio.run_coroutine_threadsafe(self._handle_offline_text_command(text), self._loop)
             return
         asyncio.run_coroutine_threadsafe(
             self.session.send_client_content(
@@ -715,6 +909,23 @@ class JarvisLive:
             ),
             self._loop
         )
+
+    async def _handle_offline_text_command(self, text: str) -> None:
+        handled = await fast_path.handle_local_text(self, text)
+        if not handled:
+            local = get_state()["local_llm"]
+            message = None
+            if local["enabled"]:
+                message = await asyncio.to_thread(local_llm.answer, text, 20.0, local["model"])
+            if not message:
+                message = "Cloud connection is unavailable. I can still handle supported local commands. Enable Qwen offline fallback if you want local conversation."
+            self.ui.write_log(f"Jarvis: {message}")
+            if self._voice_pipeline.is_ready:
+                self.set_speaking(True)
+                try:
+                    await asyncio.to_thread(self._voice_pipeline.tts.speak, message)
+                finally:
+                    self.set_speaking(False)
 
     def set_speaking(self, value: bool):
         with self._speaking_lock:
@@ -765,6 +976,7 @@ class JarvisLive:
         memory     = load_memory()
         mem_str    = format_memory_for_prompt(memory)
         sys_prompt = _load_system_prompt()
+        preferences = get_state()
 
         now      = datetime.now()
         time_str = now.strftime("%A, %B %d, %Y — %I:%M %p")
@@ -777,6 +989,10 @@ class JarvisLive:
         parts = [time_ctx]
         if mem_str:
             parts.append(mem_str)
+        parts.append(
+            f"[JARVIS PREFERENCES]\nResponse style: {preferences['voice']['reply_length']}. "
+            f"Focus mode: {'active' if preferences['focus']['active'] else 'off'}.\n"
+        )
         parts.append(sys_prompt)
 
         return types.LiveConnectConfig(
@@ -806,7 +1022,7 @@ class JarvisLive:
             thinking_config=types.ThinkingConfig(thinking_budget=0),
             realtime_input_config=types.RealtimeInputConfig(
                 automatic_activity_detection=types.AutomaticActivityDetection(
-                    silence_duration_ms=500,
+                    silence_duration_ms=400,
                 )
             ),
         )
@@ -827,11 +1043,22 @@ class JarvisLive:
     async def _run_fast_path(self) -> None:
         await fast_path.run_fast_path(self)
 
+    async def _handle_fast_path_wake_utterance(self, audio: np.ndarray) -> None:
+        await fast_path.handle_fast_path_wake_utterance(self, audio)
+
     async def _handle_fast_path_utterance(self, audio: np.ndarray) -> None:
         await fast_path.handle_fast_path_utterance(self, audio)
 
     async def _handle_fast_path_utterance_inner(self, audio: np.ndarray) -> None:
         await fast_path.handle_fast_path_utterance_inner(self, audio)
+
+    def _on_hotkey_pressed(self) -> None:
+        """Fires on the hotkey's own background thread (core/hotkey.py) --
+        never call fast_path.trigger_manual_listen() directly from here,
+        hop onto the asyncio loop first, same as _trigger_wake()."""
+        print("[Hotkey] F10 pressed")  # confirms the OS delivered the key at all — check this first when debugging
+        if self._loop:
+            self._loop.call_soon_threadsafe(fast_path.trigger_manual_listen, self)
 
     async def _receive_audio(self):
         await audio_pipeline.receive_audio(self)
@@ -868,6 +1095,28 @@ class JarvisLive:
 
     async def run(self):
         self._loop = asyncio.get_event_loop()
+        self.ui.set_power_mode(get_state()["power_mode"]["enabled"])
+
+        # The local wake-word/STT/router path remains usable while Gemini is
+        # reconnecting or has not been configured yet.
+        asyncio.create_task(self._listen_audio())
+        asyncio.create_task(self._run_fast_path())
+
+        # Global push-to-talk hotkey (F10) — lets the user start Fast Path
+        # listening with a key press instead of saying "джарвис".
+        # See core/hotkey.py for why this doesn't need Gemini/a session.
+        try:
+            self._hotkey = GlobalHotkey(self._on_hotkey_pressed)
+            if self._hotkey.start():
+                msg = "SYS: Hotkey ready — press F10 to talk to Jarvis."
+                self.ui.write_log(msg)
+                print(f"[Hotkey] {msg}")  # ui.write_log() only reaches the UI panel, never stdout
+            else:
+                msg = "SYS: Hotkey unavailable (F10 already claimed by another app, or not on Windows)."
+                self.ui.write_log(msg)
+                print(f"[Hotkey] {msg}")
+        except Exception as e:
+            print(f"[Hotkey] Disabled: {e}")
 
         # Application Registry — index every Start Menu shortcut once, in the
         # background, so the FIRST "open Discord" of the session doesn't pay
@@ -882,6 +1131,19 @@ class JarvisLive:
             except Exception as e:
                 print(f"[AppRegistry] Index build failed (falling back to live scans): {e}")
         asyncio.create_task(asyncio.to_thread(_build_app_index))
+
+        # Digital Ghost — background system-state baseline (processes,
+        # files, registry/persistence, services, network, DNS, devices,
+        # applications, event log). Runs on its own daemon thread (see
+        # ghost/engine.py), first baseline scan takes a few seconds; the
+        # digital_ghost tool self-reports "still building" until it's done
+        # rather than the user hitting a confusing empty result.
+        try:
+            from ghost.engine import ghost_engine
+            ghost_engine.start()
+            self.ui.write_log("SYS: Digital Ghost baseline monitor started.")
+        except Exception as e:
+            print(f"[Ghost] Disabled: {e}")
 
         # Start dashboard (optional — needs: pip install fastapi "uvicorn[standard]" cryptography)
         try:
@@ -926,11 +1188,23 @@ class JarvisLive:
         except Exception as e:
             print(f"[WinControl] Self-check skipped: {e}")
 
-        # Fast Path model loading (wake word, VAD, STT, TTS — ~7s) runs as a
-        # background task, NOT awaited here, so it never delays connecting to
-        # Gemini / starting to listen. _run_fast_path()'s wake-word check
+        # Fast Path model loading (wake word, VAD, STT, TTS — voice pipeline
+        # — and separately, MiniLM for the fuzzy-intent tier) runs as
+        # background tasks, NOT awaited here, so it never delays connecting
+        # to Gemini / starting to listen. _run_fast_path()'s wake-word check
         # already no-ops until self._voice_pipeline.is_ready flips true.
-        def _prewarm_voice_pipeline():
+        #
+        # The two loads are independent (different libraries, no shared
+        # state) but used to run sequentially inside one thread -- measured
+        # via core/latency.py as roughly 5s + 5s back to back
+        # (voice_pipeline_prewarm, intent_classifier_load), meaning voice
+        # wake-word detection wasn't available for ~10s after launch.
+        # Running them concurrently on two threads instead cuts that to
+        # ~5s (the slower of the two) -- this now directly shortens how
+        # long "джарвис" doesn't work for right after startup, given
+        # Fast Path's wake-word gate is what wakes main.py's run() (see
+        # _require_wake_word).
+        def _load_voice_pipeline():
             try:
                 self._voice_pipeline.prewarm()
                 msg = "SYS: Fast Path ready (local wake word / STT / TTS)."
@@ -938,6 +1212,8 @@ class JarvisLive:
                 print(f"[FastPath] {msg}")  # ui.write_log() only reaches the UI panel, never stdout
             except Exception as e:
                 print(f"[FastPath] Prewarm failed — Fast Path disabled this session: {e}")
+
+        def _load_intent_classifier():
             try:
                 self._intent_classifier.load()
                 msg = "SYS: Fast Path fuzzy-intent tier ready (MiniLM)."
@@ -946,6 +1222,11 @@ class JarvisLive:
             except Exception as e:
                 print(f"[FastPath] MiniLM classifier load failed — fuzzy tier disabled this session: {e}")
 
+        async def _prewarm_fast_path():
+            await asyncio.gather(
+                asyncio.to_thread(_load_voice_pipeline),
+                asyncio.to_thread(_load_intent_classifier),
+            )
             # Push real subsystem status to the HUD's constellation view
             # (each node reflects an actual component, not a decoration —
             # see HudCanvas._NODES in ui.py). windows_control status folds
@@ -961,10 +1242,27 @@ class JarvisLive:
                 "telegram":   self._telegram is not None,
                 "dashboard":  self._dashboard is not None,
             })
-        asyncio.create_task(asyncio.to_thread(_prewarm_voice_pipeline))
+        asyncio.create_task(_prewarm_fast_path())
 
         while True:
             try:
+                if not _get_api_key():
+                    self.ui.write_log("SYS: Cloud mode is unavailable until a Gemini API key is configured.")
+                    self.ui.set_state("LISTENING")
+                    await asyncio.sleep(5)
+                    continue
+
+                if self._require_wake_word:
+                    # Silent/ambient state: no Gemini connection, no compact
+                    # bar, just the local wake-word detector (voice/wake_word.py
+                    # via core/fast_path.py) running. _trigger_wake() -- reached
+                    # from voice, typed, dashboard, or Telegram input while
+                    # gated -- sets _wake_event with _pending_wake_text as the
+                    # opening line.
+                    self.ui.set_state("SLEEPING")
+                    await self._wake_event.wait()
+                    self._wake_event.clear()
+
                 print("[JARVIS] Connecting...")
                 self.ui.set_state("THINKING")
                 config = self._build_config()
@@ -984,6 +1282,15 @@ class JarvisLive:
                     self.out_queue        = asyncio.Queue(maxsize=200)
                     self._turn_done_event = asyncio.Event()
 
+                    # core/fast_path.py's wake-word branch already shows this
+                    # immediately on detection (before transcription) for
+                    # voice wakes -- this covers every OTHER path that can
+                    # reach a connection (typed text, dashboard, Telegram,
+                    # and any ordinary error-recovery reconnect of an
+                    # already-active conversation). Idempotent if already
+                    # shown.
+                    self.ui.show_compact_bar()
+
                     # Reset transient state that must not carry over from a previous session
                     self._pending_vision       = None
                     self._vision_cam_active    = False
@@ -994,9 +1301,10 @@ class JarvisLive:
                     self._turn_measured          = True
                     self._tool_reaction_measured = True
                     self._tool_response_sent_at  = None
+                    self._audio_response_received_at = None
+                    self._speaker_start_pending = False
                     with self._fast_path_lock:
                         self._fast_path_state = "idle"
-                    self._fast_path_queue = None  # _run_fast_path() recreates it on (re)start
 
                     print("[JARVIS] Connected.")
                     self.ui.set_state("LISTENING")
@@ -1005,13 +1313,23 @@ class JarvisLive:
                     if self._dashboard:
                         await self._dashboard.broadcast({"type": "status", "state": "active"})
 
+                    # Wake word (or typed/dashboard/Telegram text) reached us
+                    # while gated -- that utterance is the opening line.
+                    if self._pending_wake_text:
+                        opener, self._pending_wake_text = self._pending_wake_text, None
+                        await session.send_client_content(
+                            turns={"parts": [{"text": opener}]},
+                            turn_complete=True,
+                        )
+                    self._require_wake_word = False
+
                     tg.create_task(self._send_realtime())
-                    tg.create_task(self._listen_audio())
                     tg.create_task(self._receive_audio())
                     tg.create_task(self._play_audio())
-                    tg.create_task(self._run_fast_path())
                     tg.create_task(self._run_system_monitor())
                     tg.create_task(self._run_proactive_mode())
+                    tg.create_task(routine_bridge.run_scheduled_routines(self))
+                    tg.create_task(run_idle_watchdog(self))
                     if self._dashboard:
                         tg.create_task(self._relay_phone_audio())
 
@@ -1020,14 +1338,6 @@ class JarvisLive:
             except SystemExit:
                 raise
             except BaseException as e:
-                # Catches both Exception and BaseExceptionGroup (Python 3.11+
-                # TaskGroup raises BaseExceptionGroup when tasks are cancelled
-                # externally, which `except Exception` would miss, letting the
-                # exception escape the while-loop and causing asyncio.run() to
-                # start shutdown — resulting in "executor after shutdown" errors).
-                print(f"[JARVIS] Error ({type(e).__name__}): {e}")
-                traceback.print_exc()
-
                 # `e` itself is usually just an (Base)ExceptionGroup wrapper
                 # once we're inside the TaskGroup — str(e) is always the
                 # generic "unhandled errors in a TaskGroup (N sub-exceptions)"
@@ -1037,14 +1347,34 @@ class JarvisLive:
                 # all fell into the catch-all `else` branch below. Unwrap to
                 # the real leaf exception(s) so classification actually works.
                 leaves = _flatten_exceptions(e)
+                is_idle_close = any(isinstance(x, IntentionalIdleClose) for x in leaves)
+
+                # Catches both Exception and BaseExceptionGroup (Python 3.11+
+                # TaskGroup raises BaseExceptionGroup when tasks are cancelled
+                # externally, which `except Exception` would miss, letting the
+                # exception escape the while-loop and causing asyncio.run() to
+                # start shutdown — resulting in "executor after shutdown" errors).
+                # Skip the noisy error print/traceback for a deliberate
+                # idle-close -- it isn't an error, just going quiet on purpose.
+                if not is_idle_close:
+                    print(f"[JARVIS] Error ({type(e).__name__}): {e}")
+                    traceback.print_exc()
                 err_str = "; ".join(f"{type(x).__name__}: {x}" for x in leaves)
+
+                # Deliberate idle-close (core/idle_watchdog.py) -- not an
+                # error, so it must be classified before every branch below:
+                # no error log, no backoff, just re-arm the wake gate so the
+                # next connection waits for the wake word again.
+                if is_idle_close:
+                    self._require_wake_word = True
+                    self.ui.hide_compact_bar()
 
                 # Local audio device problem (no driver / device unplugged) —
                 # this has nothing to do with the Gemini connection, so
                 # reconnecting rapidly every few seconds just spams retries
                 # that can never succeed until the user fixes their sound
                 # settings. Surface it plainly and back off slowly instead.
-                if any(_is_audio_device_error(x) for x in leaves):
+                elif any(_is_audio_device_error(x) for x in leaves):
                     self.ui.write_log(
                         "AUDIO: не найдено аудиоустройство (нет драйвера или устройство "
                         "недоступно) — проверьте настройки звука Windows. "
@@ -1091,7 +1421,16 @@ class JarvisLive:
                     self._conn_backoff = 3
                     self.ui.write_log(f"ERR: {err_str[:200]} — reconnecting in 3s...")
             finally:
+                # Also null the queues, not just the session: the mic
+                # callback (core/audio_pipeline.py) only checks
+                # `self.out_queue is not None` before enqueuing Gemini-bound
+                # audio, so a stale queue left non-None here would keep
+                # silently accepting audio nobody drains after any
+                # disconnect, until it hits maxsize=200 and raises
+                # QueueFull inside the mic callback thread.
                 self.session = None
+                self.audio_in_queue = None
+                self.out_queue = None
 
             self.set_speaking(False)
             self.ui.set_state("SLEEPING")
@@ -1103,11 +1442,31 @@ class JarvisLive:
             print(f"[JARVIS] Reconnecting in {delay}s...")
             await asyncio.sleep(delay)
 
+def _handle_startup_command() -> bool:
+    commands = {"--install-autostart", "--remove-autostart", "--autostart-status"}
+    if not any(command in sys.argv[1:] for command in commands):
+        return False
+    from core import autostart
+    try:
+        if "--install-autostart" in sys.argv:
+            print(f"Autostart installed: {autostart.install(Path(__file__))}")
+        elif "--remove-autostart" in sys.argv:
+            print("Autostart removed." if autostart.remove() else "Autostart was not installed.")
+        else:
+            command = autostart.status()
+            print(f"Autostart: {command}" if command else "Autostart is not installed.")
+    except OSError as error:
+        print(f"Autostart error: {error}")
+        return True
+    return True
+
+
 def main():
+    if _handle_startup_command():
+        return
     ui = JarvisUI("face.png")
 
     def runner():
-        ui.wait_for_api_key()
         jarvis = JarvisLive(ui)
         try:
             asyncio.run(jarvis.run())

@@ -17,6 +17,12 @@ import time
 import psutil
 
 from ui.consts import _OS
+from actions.process_hunter import count_suspicious_fast
+
+# Process Hunter's fast heuristic walks every running process's exe path —
+# cheap, but not "every 1.5s tick" cheap. Sampled on a slower cadence than
+# cpu/mem/net/gpu/tmp; see _THREATS_EVERY_N_TICKS below.
+_THREATS_EVERY_N_TICKS = 5
 
 # ── Windows GPU via NVML DLL (no subprocess, no console window) ──────────────
 _nvml_lib: object = None   # cached ctypes DLL
@@ -69,9 +75,11 @@ class _SysMetrics:
         self.net  = 0.0
         self.gpu  = -1.0
         self.tmp  = -1.0
+        self.threats = 0
         self._lock = threading.Lock()
         self._last_net = psutil.net_io_counters()
         self._last_net_t = time.time()
+        self._tick = 0
         self._running = True
         t = threading.Thread(target=self._loop, daemon=True)
         t.start()
@@ -104,12 +112,22 @@ class _SysMetrics:
 
         tmp = self._get_temp()
 
+        self._tick += 1
+        threats = None
+        if self._tick % _THREATS_EVERY_N_TICKS == 0:
+            try:
+                threats = count_suspicious_fast()
+            except Exception:
+                threats = None
+
         with self._lock:
             self.cpu = cpu
             self.mem = mem
             self.net = net
             self.gpu = gpu
             self.tmp = tmp
+            if threats is not None:
+                self.threats = threats
 
     def _get_gpu(self) -> float:
         # pynvml — subprocess-free, works on all platforms if installed
@@ -180,6 +198,7 @@ class _SysMetrics:
                 "net": self.net,
                 "gpu": self.gpu,
                 "tmp": self.tmp,
+                "threats": self.threats,
             }
 
 

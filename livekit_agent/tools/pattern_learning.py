@@ -95,6 +95,8 @@ No markdown, no explanation."""
     # instead of this project's metered API key when one is available (see
     # tools/claude_cli.py). Falls back to the direct API call otherwise.
     text = await claude_cli.ask(prompt)
+    if text is None and config.SUBSCRIPTION_MODE:
+        return
     if text is None:
         client = anthropic.AsyncAnthropic(api_key=config.ANTHROPIC_API_KEY)
         msg = await client.messages.create(

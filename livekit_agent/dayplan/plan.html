@@ -1,0 +1,578 @@
+<!doctype html>
+<html lang="ru">
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width, initial-scale=1">
+<title>Jarvis — план дня</title>
+<link rel="preconnect" href="https://fonts.googleapis.com">
+<link rel="preconnect" href="https://fonts.gstatic.com" crossorigin>
+<link href="https://fonts.googleapis.com/css2?family=Oxanium:wght@300;500;700&family=Manrope:wght@400;500;600&display=swap" rel="stylesheet">
+<style>
+  :root {
+    --night: #061226;
+    --deep: #0A1F3D;
+    --holo: #7FE3FF;
+    --holo-dim: rgba(127, 227, 255, 0.28);
+    --amber: #FFB54A;
+    --ice: #DDF3FF;
+    --steel: #5B7A99;
+    --display: "Oxanium", "Segoe UI", sans-serif;
+    --text: "Manrope", "Segoe UI", sans-serif;
+  }
+  * { box-sizing: border-box; margin: 0; padding: 0; }
+  html, body { height: 100%; overflow: hidden; }
+  body {
+    background:
+      radial-gradient(ellipse 70% 60% at 34% 52%, #0E2A52 0%, rgba(14, 42, 82, 0) 70%),
+      radial-gradient(ellipse 50% 40% at 90% 0%, rgba(127, 227, 255, 0.07) 0%, rgba(0, 0, 0, 0) 70%),
+      var(--night);
+    color: var(--ice);
+    font-family: var(--text);
+    -webkit-font-smoothing: antialiased;
+  }
+  canvas { position: fixed; inset: 0; width: 100vw; height: 100vh; display: block; }
+  #gl { z-index: 0; }
+  #scene { z-index: 1; }
+
+  .stage {
+    position: relative; z-index: 2; height: 100vh; opacity: 0;
+    display: grid;
+    grid-template-columns: minmax(0, 1fr) clamp(320px, 27vw, 520px);
+    grid-template-rows: auto 1fr;
+    padding: clamp(24px, 3.2vh, 48px) clamp(24px, 3vw, 64px);
+    column-gap: clamp(24px, 3vw, 64px);
+  }
+
+  header { grid-column: 1 / -1; display: flex; align-items: baseline; justify-content: space-between; gap: 32px; }
+  .day { font-family: var(--display); font-weight: 300; font-size: clamp(28px, 3.4vh, 44px); letter-spacing: 0.01em; }
+  .day b { font-weight: 700; }
+  .greet { color: var(--steel); font-size: clamp(15px, 1.7vh, 20px); margin-top: 6px; }
+  .weather { text-align: right; font-size: clamp(15px, 1.7vh, 20px); color: var(--ice); }
+  .weather .t { font-family: var(--display); font-size: clamp(28px, 3.4vh, 44px); font-weight: 500; color: var(--holo); }
+  .weather .c { color: var(--steel); display: block; margin-top: 4px; }
+
+  /* the clock sits over the ring's centre; its position is set from JS so it tracks the projection */
+  .clock { position: fixed; z-index: 2; transform: translate(-50%, -50%); text-align: center; pointer-events: none; opacity: 0; }
+  .clock .hm { font-family: var(--display); font-weight: 300; font-size: clamp(64px, 11vh, 150px); line-height: 1;
+               letter-spacing: -0.02em; color: var(--ice); text-shadow: 0 0 36px rgba(127, 227, 255, 0.35); }
+  .clock .hm .s { color: var(--holo); opacity: 0.55; font-size: 0.34em; vertical-align: 0.95em; margin-left: 0.12em; letter-spacing: 0; }
+  .clock .left { margin-top: 10px; font-size: clamp(14px, 1.6vh, 19px); color: var(--steel); }
+  .clock .left em { font-style: normal; color: var(--amber); }
+
+  aside { grid-column: 2; grid-row: 2; display: flex; flex-direction: column; gap: clamp(20px, 3vh, 40px);
+          padding-top: clamp(16px, 4vh, 56px); overflow: hidden; }
+  section h2 { font-family: var(--display); font-weight: 500; font-size: clamp(17px, 2vh, 24px); color: var(--holo);
+               padding-bottom: 10px; margin-bottom: 12px; border-bottom: 1px solid var(--holo-dim); display: flex; justify-content: space-between; }
+  section h2 small { font-family: var(--text); font-weight: 400; font-size: 0.72em; color: var(--steel); align-self: flex-end; }
+  ul { list-style: none; }
+  .ev { display: grid; grid-template-columns: 4.2em 1fr; gap: 14px; padding: 9px 0; align-items: baseline; }
+  .ev time { font-family: var(--display); font-weight: 500; font-size: clamp(17px, 2vh, 23px); color: var(--ice); }
+  .ev .ti { font-size: clamp(15px, 1.75vh, 20px); line-height: 1.35; }
+  .ev .in { display: block; font-size: 0.8em; color: var(--steel); margin-top: 2px; }
+  .ev.next time, .ev.next .in { color: var(--amber); }
+  .ev.past { opacity: 0.38; }
+  .todo { display: flex; gap: 14px; padding: 7px 0; font-size: clamp(15px, 1.75vh, 20px); line-height: 1.35; }
+  .todo::before { content: ""; flex: none; width: 0.8em; height: 0.8em; margin-top: 0.3em; border: 1.5px solid var(--holo); border-radius: 3px; }
+  .rem { display: flex; justify-content: space-between; gap: 16px; padding: 7px 0; font-size: clamp(15px, 1.75vh, 20px); }
+  .rem .cd { font-family: var(--display); color: var(--amber); font-variant-numeric: tabular-nums; white-space: nowrap; }
+  .empty { color: var(--steel); font-size: clamp(14px, 1.6vh, 18px); line-height: 1.5; }
+  .more { color: var(--steel); font-size: 0.85em; padding-top: 6px; }
+
+  /* as a desktop wallpaper: keep clear of the desktop-icon column on the left */
+  html.wallpaper .stage { padding-left: calc(var(--icons, 230px) + 24px); }
+
+  /* asleep: everything has flowed back into a single pulsing orb */
+  .standby { position: fixed; z-index: 3; transform: translate(-50%, -50%); text-align: center;
+             opacity: 0; pointer-events: none; color: var(--steel);
+             font: 500 13px var(--display); letter-spacing: 0.3em; }
+  .standby i { display: block; width: 18px; height: 18px; margin: 0 auto 16px; border-radius: 50%; background: #BFE9FF;
+               box-shadow: 0 0 18px 6px rgba(111, 216, 255, 0.55), 0 0 60px 20px rgba(60, 150, 255, 0.25);
+               animation: breathe 3.2s ease-in-out infinite; }
+  @keyframes breathe { 50% { transform: scale(0.7); opacity: 0.6; } }
+  .nogl { position: fixed; inset: 0; display: none; }
+
+  @media (max-width: 900px) {
+    .stage { grid-template-columns: 1fr; grid-template-rows: auto 52vh auto; overflow: auto; }
+    aside { grid-column: 1; grid-row: 3; }
+    html, body { overflow: auto; }
+  }
+</style>
+</head>
+<body>
+<canvas id="gl" aria-hidden="true"></canvas>
+<canvas id="scene" aria-hidden="true"></canvas>
+<div class="stage">
+  <header>
+    <div>
+      <h1 class="day" id="day"></h1>
+      <p class="greet" id="greet"></p>
+    </div>
+    <div class="weather" id="weather"></div>
+  </header>
+  <aside>
+    <section><h2>Дальше <small id="evCount"></small></h2><ul id="events"></ul></section>
+    <section><h2>Дела <small id="todoCount"></small></h2><ul id="todos"></ul></section>
+    <section id="remSec"><h2>Таймеры и напоминания</h2><ul id="rems"></ul></section>
+  </aside>
+</div>
+<div class="standby" id="standby" aria-hidden="true"><i></i>STANDBY</div>
+<div class="clock" id="clock"><div class="hm" id="hm"></div><div class="left" id="left"></div></div>
+
+<script>
+"use strict";
+const $ = (id) => document.getElementById(id);
+const WALLPAPER = /[?&]wallpaper/.test(location.search);
+const ICONS_W = WALLPAPER ? 230 : 0;                 // the desktop-icon column a wallpaper sits under
+if (WALLPAPER) document.documentElement.classList.add("wallpaper");
+const reduce = matchMedia("(prefers-reduced-motion: reduce)").matches;
+let DATA = { events: [], todos: [], reminders: [], weather: null, name: "", city: "" };
+const WEEK = ["воскресенье", "понедельник", "вторник", "среда", "четверг", "пятница", "суббота"];
+const MON = ["января", "февраля", "марта", "апреля", "мая", "июня", "июля", "августа", "сентября", "октября", "ноября", "декабря"];
+const pad = (n) => String(n).padStart(2, "0");
+const minsOf = (d) => d.getHours() * 60 + d.getMinutes() + d.getSeconds() / 60;
+const esc = (s) => String(s).replace(/[&<>"]/g, (c) => ({ "&": "&amp;", "<": "&lt;", ">": "&gt;", '"': "&quot;" }[c]));
+const ss = (x) => { x = Math.min(1, Math.max(0, x)); return x * x * (3 - 2 * x); };
+
+function span(min) {
+  const m = Math.max(0, Math.round(min));
+  if (m < 60) return `через ${m} мин`;
+  const h = Math.floor(m / 60), r = m % 60;
+  return r ? `через ${h} ч ${r} мин` : `через ${h} ч`;
+}
+function countdown(sec) {
+  sec = Math.max(0, Math.round(sec));
+  const h = Math.floor(sec / 3600), m = Math.floor((sec % 3600) / 60), s = sec % 60;
+  return h ? `${h}:${pad(m)}:${pad(s)}` : `${pad(m)}:${pad(s)}`;
+}
+
+/* ---------- data from Jarvis (the panel server), re-read every 15 s ---------- */
+async function poll() {
+  try { DATA = await (await fetch("/data.json", { cache: "no-store" })).json(); renderLists(); } catch (e) { /* server restarting */ }
+}
+function renderLists() {
+  const now = new Date();
+  const hour = now.getHours();
+  const part = hour < 5 ? "Доброй ночи" : hour < 12 ? "Доброе утро" : hour < 18 ? "Добрый день" : "Добрый вечер";
+  $("day").innerHTML = `<b>${WEEK[now.getDay()][0].toUpperCase() + WEEK[now.getDay()].slice(1)}</b>, ${now.getDate()} ${MON[now.getMonth()]}`;
+  $("greet").textContent = DATA.name ? `${part}, ${DATA.name}.` : `${part}.`;
+  const w = DATA.weather;
+  $("weather").innerHTML = w
+    ? `<span class="t">${Math.round(w.temp)}°</span> ${esc(DATA.city || "")}<span class="c">${esc(w.condition)}${w.min != null ? `, днём ${Math.round(w.min)}…${Math.round(w.max)}°` : ""}${w.rain != null ? `, осадки ${w.rain}%` : ""}</span>`
+    : "";
+  const nowMin = minsOf(now);
+  const evs = DATA.events.slice().sort((a, b) => a.start - b.start);
+  const upcoming = evs.filter((e) => e.start + e.duration > nowMin);
+  const nextIdx = evs.findIndex((e) => e.start >= nowMin);
+  const shown = evs.filter((e) => e.start + e.duration > nowMin - 90).slice(0, 6);
+  $("evCount").textContent = evs.length ? `${upcoming.length} из ${evs.length}` : "";
+  $("events").innerHTML = shown.length ? shown.map((e) => {
+    const past = e.start + e.duration <= nowMin, isNext = evs[nextIdx] === e;
+    const running = e.start <= nowMin && !past;
+    const note = running ? "идёт сейчас" : past ? "прошло" : span(e.start - nowMin);
+    const hm = `${pad(Math.floor(e.start / 60))}:${pad(Math.floor(e.start % 60))}`;
+    return `<li class="ev${isNext || running ? " next" : ""}${past ? " past" : ""}"><time>${hm}</time><span class="ti">${esc(e.title)}<span class="in">${note}</span></span></li>`;
+  }).join("") : `<li class="empty">На сегодня событий нет. Скажите «добавь встречу на 15:00» — она появится на кольце.</li>`;
+  const todos = DATA.todos;
+  $("todoCount").textContent = todos.length ? String(todos.length) : "";
+  $("todos").innerHTML = todos.length
+    ? todos.slice(0, 7).map((t) => `<li class="todo">${esc(t)}</li>`).join("") + (todos.length > 7 ? `<li class="more">и ещё ${todos.length - 7}</li>` : "")
+    : `<li class="empty">Список дел пуст.</li>`;
+  renderReminders();
+}
+function renderReminders() {
+  const now = Date.now() / 1000;
+  const rems = DATA.reminders.filter((r) => r.at > now - 5).sort((a, b) => a.at - b.at);
+  $("remSec").style.display = rems.length ? "" : "none";
+  $("rems").innerHTML = rems.slice(0, 5).map((r) => {
+    const soon = r.at - now < 3 * 3600;
+    const when = soon ? countdown(r.at - now) : new Date(r.at * 1000).toLocaleTimeString("ru-RU", { hour: "2-digit", minute: "2-digit" });
+    return `<li class="rem"><span>${r.kind === "timer" ? "Таймер " : ""}${esc(r.text)}</span><span class="cd">${when}</span></li>`;
+  }).join("");
+}
+function tick() {
+  const now = new Date();
+  $("hm").innerHTML = `${pad(now.getHours())}:${pad(now.getMinutes())}<span class="s">${pad(now.getSeconds())}</span>`;
+  const nowMin = minsOf(now);
+  const next = DATA.events.filter((e) => e.start >= nowMin).sort((a, b) => a.start - b.start)[0];
+  const running = DATA.events.find((e) => e.start <= nowMin && e.start + e.duration > nowMin);
+  $("left").innerHTML = running ? `Сейчас: <em>${esc(running.title)}</em>`
+    : next ? `${esc(next.title)} — <em>${span(next.start - nowMin)}</em>`
+    : `До конца дня ${span(1440 - nowMin).replace("через ", "")}`;
+  renderReminders();
+}
+
+/* ---------- layout + the ring's projection (shared by the particles and the labels) ---------- */
+const glc = $("gl"), cv = $("scene"), cx = cv.getContext("2d");
+let W = 0, H = 0, DPR = 1, GDPR = 1, center = { x: 0, y: 0 }, R = 0;
+function resize() {
+  DPR = Math.min(2, devicePixelRatio || 1);
+  W = innerWidth; H = innerHeight;
+  cv.width = W * DPR; cv.height = H * DPR;
+  cx.setTransform(DPR, 0, 0, DPR, 0, 0);
+  GDPR = Math.min(2, Math.max(1.5, devicePixelRatio || 1), Math.sqrt(9e6 / (W * H)));
+  glc.width = Math.round(W * GDPR); glc.height = Math.round(H * GDPR);
+  const narrow = W < 900;
+  const aside = narrow ? 0 : Math.min(Math.max(320, W * 0.27), 520) + W * 0.06;
+  const avail = narrow ? H * 0.52 : H * 0.8;
+  const free = W - aside - ICONS_W;
+  R = Math.min(free * 0.39, avail / 1.62);
+  center = { x: ICONS_W + free / 2 + W * 0.03, y: (narrow ? H * 0.1 : H * 0.15) + R * 0.95 };
+  const sb = $("standby"); sb.style.left = center.x + "px"; sb.style.top = center.y + "px";
+  if (gl) gl.viewport(0, 0, glc.width, glc.height);
+}
+addEventListener("resize", resize);
+
+const TILT = 0.5, FOCAL = 3.2, HOVER = -0.66;
+function project(x, y, z, yaw) {
+  const cy = Math.cos(yaw), sy = Math.sin(yaw);
+  const x1 = x * cy - z * sy, z1 = x * sy + z * cy;
+  const ct = Math.cos(TILT), st = Math.sin(TILT);
+  const y2 = y * ct - z1 * st, z2 = y * st + z1 * ct;
+  const k = FOCAL / (FOCAL + z2);
+  return { x: center.x + x1 * R * k, y: center.y + y2 * R * k, z: z2, k };
+}
+const ringPt = (min, r = 1, lift = 0) => {
+  const a = (min / 1440) * Math.PI * 2 - Math.PI / 2;
+  return [Math.cos(a) * r, -lift, Math.sin(a) * r];
+};
+const depthAlpha = (z) => 0.25 + 0.75 * (1 - (z + 1) / 2);
+
+/* ---------- the particles: everything on this screen is made of glowing orbs ---------- */
+// kinds: 0 ring band, 1 inner rings, 2 hour ticks, 3 globe, 4 dust, 5 text (sampled from the page)
+const VS = `
+attribute vec4 aA; attribute vec4 aB;
+uniform vec2 uRes, uC, uOrb; uniform float uR, uYaw, uGy, uT, uNow, uDpr, uForm, uMode, uPass, uTextA;
+uniform vec4 uEv[8]; uniform float uEvN;
+varying vec3 vCol; varying float vA; varying float vPx; varying float vGlow;
+const float TILT = 0.5; const float FOCAL = 3.2; const float HOVER = -0.66;
+const vec3 CYAN = vec3(0.50, 0.89, 1.0); const vec3 HOT = vec3(0.70, 0.95, 1.0);
+const vec3 AMBER = vec3(1.0, 0.71, 0.29); const vec3 ICE = vec3(0.87, 0.95, 1.0);
+vec3 proj(vec3 v, float yaw) {
+  float cy = cos(yaw), sy = sin(yaw);
+  float x1 = v.x * cy - v.z * sy, z1 = v.x * sy + v.z * cy;
+  float y2 = v.y * cos(TILT) - z1 * sin(TILT), z2 = v.y * sin(TILT) + z1 * cos(TILT);
+  float k = FOCAL / (FOCAL + z2);
+  return vec3(uC + vec2(x1, y2) * uR * k, z2);
+}
+vec3 ringPt(float m, float r, float lift) {
+  float a = m / 1440.0 * 6.2832 - 1.5708;
+  return vec3(cos(a) * r, -lift, sin(a) * r);
+}
+float depthA(float z) { return 0.25 + 0.75 * (1.0 - (z + 1.0) / 2.0); }
+void main() {
+  float kind = aA.x, seed = aB.x, j = aB.y;
+  vec3 col = CYAN; float bright = 0.3; float size = 1.5; vec3 pz;
+  if (kind < 0.5) {                                  // the day ring: a dense band of orbs
+    float m = aA.y, lift = aA.w;
+    bright = m <= uNow ? 0.55 : 0.30;
+    for (int i = 0; i < 8; i++) {
+      if (float(i) >= uEvN) break;
+      vec4 ev = uEv[i];
+      if (m >= ev.x && m <= ev.y) {
+        lift += 0.06;
+        bright = ev.z > 1.5 ? 1.0 : ev.z > 0.5 ? 0.20 : 0.9;
+        col = ev.z > 1.5 ? AMBER : HOT;
+        size = 2.0;
+      }
+    }
+    pz = proj(ringPt(m, aA.z, lift), uYaw);
+    bright *= depthA(pz.z);
+  } else if (kind < 1.5) {                           // inner rings, turning slowly
+    float m = aA.y + aA.w * uT * 12.0;
+    pz = proj(ringPt(m, aA.z, 0.0), uYaw);
+    bright = (aA.z < 0.66 ? 0.20 : 0.13) * depthA(pz.z); size = 1.2;
+  } else if (kind < 2.5) {                           // hour ticks
+    pz = proj(ringPt(aA.y, aA.z, 0.0), uYaw);
+    bright = (aA.w > 0.5 ? 0.75 : 0.38) * depthA(pz.z); size = 1.4;
+  } else if (kind < 3.5) {                           // the globe over the clock
+    vec3 g = aA.yzw;
+    pz = proj(vec3(g.x * 0.36, g.y * 0.36 + HOVER, g.z * 0.36), uGy);
+    float front = clamp(1.0 - ((pz.z - HOVER * sin(TILT)) / 0.36 + 1.0) / 2.0, 0.0, 1.0);
+    bright = 0.07 + 0.42 * front; size = 1.1 + front;
+  } else if (kind < 4.5) {                           // dust
+    pz = proj(vec3(aA.y, aA.z + sin(uT * 0.2 + seed * 6.0) * 0.02, aA.w), uYaw * 0.3);
+    bright = 0.22 * seed; size = 1.3;
+  } else {                                           // letters and numbers of the page
+    pz = vec3(aB.zw, 0.0);
+    bright = 0.85 * uTextA; col = ICE; size = 1.05;
+  }
+  vec2 home = pz.xy, scr = home;
+  float I = bright;
+
+  // forming (uMode 1): a nebula leaves the orb at the ring's centre, turns round it and settles
+  // into the ring, the globe and the letters; dissolving is the same thing played backwards
+  if (uMode > 0.5 && uMode < 1.5) {
+    float T = uForm - (uPass > 0.5 ? 0.06 : 0.0);
+    float start = 0.15 + length(home - uC) / uR * 0.55 + j * 0.45;
+    float dur = 1.8 + 0.6 * fract(seed * 3.71);
+    float k = clamp((T - start) / dur, 0.0, 1.0);
+    float e = k * k * k * (k * (k * 6.0 - 15.0) + 10.0);
+    float a0 = seed * 6.2832 + uForm * 0.9;
+    vec2 c1 = uC + vec2(cos(a0), sin(a0) * 0.55) * uR * (0.7 + 1.1 * j);
+    vec2 c2 = home + normalize(home - uC + vec2(0.001)) * uR * 0.2;
+    float u = 1.0 - e;
+    scr = u * u * u * uOrb + 3.0 * u * u * e * c1 + 3.0 * u * e * e * c2 + e * e * e * home;
+    float alive = smoothstep(0.0, 0.1, k) * step(start, T);
+    float settle = smoothstep(0.62, 1.0, e);
+    float mist = 0.22 + 0.22 * fract(seed * 2.39);
+    col = mix(vec3(0.62, 0.90, 1.0), col, settle);
+    I = mix(mist, bright, settle) * alive;
+    if (kind > 4.5) I = mix(mist, 0.85, settle) * alive * uTextA;
+  } else if (uMode > 1.5) {
+    I = 0.0;
+  }
+
+  vA = I; vCol = col; vGlow = uPass;
+  float ps = size * uDpr;
+  if (uPass > 0.5) { ps *= 4.0; vA *= (bright > 0.8 ? 0.12 : 0.03); }
+  if (vA < 0.004) ps = 0.0;
+  gl_PointSize = ps; vPx = ps;
+  gl_Position = vec4(scr.x / uRes.x * 2.0 - 1.0, 1.0 - scr.y / uRes.y * 2.0, 0.0, 1.0);
+}`;
+const FS = `
+precision mediump float;
+varying vec3 vCol; varying float vA; varying float vPx; varying float vGlow;
+void main() {
+  float r = length(gl_PointCoord - 0.5) * 2.0;
+  if (r > 1.0) discard;
+  float a;
+  if (vGlow > 0.5) a = exp(-r * r * 3.0);
+  else { float aa = 2.0 / max(vPx, 1.0); a = (1.0 - smoothstep(1.0 - aa, 1.0, r)) * (0.4 + 0.75 * exp(-r * r * 3.0)); }
+  a *= vA;
+  gl_FragColor = vec4(vCol * a, a);
+}`;
+
+let gl = null, prog = null, U = {}, STATIC = null, TEXT = null;
+function makeBuf(arrA, arrB) {
+  const a = gl.createBuffer(); gl.bindBuffer(gl.ARRAY_BUFFER, a); gl.bufferData(gl.ARRAY_BUFFER, new Float32Array(arrA), gl.STATIC_DRAW);
+  const b = gl.createBuffer(); gl.bindBuffer(gl.ARRAY_BUFFER, b); gl.bufferData(gl.ARRAY_BUFFER, new Float32Array(arrB), gl.STATIC_DRAW);
+  return { a, b, n: arrA.length / 4 };
+}
+function buildStatic() {
+  const A = [], B = [];
+  const push = (k, p1, p2, p3, x = 0, y = 0) => { A.push(k, p1, p2, p3); B.push(Math.random(), Math.random(), x, y); };
+  for (let i = 0; i < 30000; i++) {                                  // the ring band
+    const g = (Math.random() + Math.random() + Math.random() - 1.5) / 1.5;   // soft gaussian-ish width
+    push(0, Math.random() * 1440, 1 + g * 0.018, Math.abs(g) * 0.01);
+  }
+  for (let i = 0; i < 9000; i++) push(1, Math.random() * 1440, i % 2 ? 0.62 : 0.70, i % 2 ? 1 : -0.6);
+  for (let h = 0; h < 96; h++) {                                     // ticks: every 15 min, bigger on the hour marks
+    const major = h % 12 === 0, len = major ? 0.075 : h % 4 === 0 ? 0.045 : 0.025;
+    for (let i = 0; i < (major ? 60 : 24); i++) push(2, h * 15 + (Math.random() - 0.5) * 1.2, 1 + Math.random() * len, major ? 1 : 0);
+  }
+  for (let i = 0, n = 5200; i < n; i++) {                           // fibonacci globe
+    const y = 1 - (i / (n - 1)) * 2, r = Math.sqrt(1 - y * y), th = i * 2.39996;
+    push(3, Math.cos(th) * r, y, Math.sin(th) * r);
+  }
+  for (let i = 0; i < 2200; i++) push(4, Math.random() * 2.8 - 1.4, Math.random() * 1.6 - 1.1, Math.random() * 2.8 - 1.4);
+  STATIC = makeBuf(A, B);
+}
+// sample the page's own text (as laid out now) into points, so the letters can form out of particles
+function buildText() {
+  const off = document.createElement("canvas");
+  off.width = W; off.height = H;
+  const g = off.getContext("2d");
+  g.fillStyle = "#fff"; g.textBaseline = "middle";
+  const roots = document.querySelectorAll("#day, #greet, #weather, #hm, #left, aside h2, aside li");
+  const range = document.createRange();
+  for (const root of roots) {
+    const walker = document.createTreeWalker(root, NodeFilter.SHOW_TEXT);
+    let node;
+    while ((node = walker.nextNode())) {
+      const cs = getComputedStyle(node.parentElement);
+      g.font = `${cs.fontWeight} ${cs.fontSize} ${cs.fontFamily}`;
+      const text = node.textContent;
+      for (let i = 0; i < text.length; i++) {
+        if (text[i].trim() === "") continue;
+        range.setStart(node, i); range.setEnd(node, i + 1);
+        const r = range.getBoundingClientRect();
+        if (r.width === 0) continue;
+        g.fillText(text[i], r.left, r.top + r.height / 2);
+      }
+    }
+  }
+  const img = g.getImageData(0, 0, W, H).data;
+  const pts = [];
+  for (let y = 0; y < H; y++) for (let x = 0; x < W; x++) if (img[(y * W + x) * 4 + 3] > 110) pts.push(x, y);
+  const max = 32000, n = pts.length / 2, stride = Math.max(1, n / max);
+  const A = [], B = [];
+  for (let f = 0; f < n; f += stride) {
+    const i = Math.floor(f);
+    A.push(5, 0, 0, 0); B.push(Math.random(), Math.random(), pts[i * 2] + Math.random() - 0.5, pts[i * 2 + 1] + Math.random() - 0.5);
+  }
+  if (TEXT) { gl.deleteBuffer(TEXT.a); gl.deleteBuffer(TEXT.b); }
+  TEXT = A.length ? makeBuf(A, B) : null;
+}
+function initGL() {
+  gl = glc.getContext("webgl", { antialias: false, premultipliedAlpha: true, alpha: true });
+  if (!gl) return;
+  const sh = (type, s) => { const o = gl.createShader(type); gl.shaderSource(o, s); gl.compileShader(o);
+    if (!gl.getShaderParameter(o, gl.COMPILE_STATUS)) throw new Error(gl.getShaderInfoLog(o)); return o; };
+  try {
+    prog = gl.createProgram();
+    gl.attachShader(prog, sh(gl.VERTEX_SHADER, VS)); gl.attachShader(prog, sh(gl.FRAGMENT_SHADER, FS));
+    gl.linkProgram(prog);
+    if (!gl.getProgramParameter(prog, gl.LINK_STATUS)) throw new Error(gl.getProgramInfoLog(prog));
+  } catch (e) { console.error(e); gl = null; return; }
+  gl.useProgram(prog);
+  for (const u of ["uRes", "uC", "uOrb", "uR", "uYaw", "uGy", "uT", "uNow", "uDpr", "uForm", "uMode", "uPass", "uTextA", "uEv", "uEvN"])
+    U[u] = gl.getUniformLocation(prog, u);
+  U.aA = gl.getAttribLocation(prog, "aA"); U.aB = gl.getAttribLocation(prog, "aB");
+  gl.enableVertexAttribArray(U.aA); gl.enableVertexAttribArray(U.aB);
+  gl.enable(gl.BLEND); gl.blendFunc(gl.ONE, gl.ONE);
+  gl.clearColor(0, 0, 0, 0);
+  gl.viewport(0, 0, glc.width, glc.height);
+  buildStatic();
+}
+function drawBuf(buf) {
+  if (!buf) return;
+  gl.bindBuffer(gl.ARRAY_BUFFER, buf.a); gl.vertexAttribPointer(U.aA, 4, gl.FLOAT, false, 0, 0);
+  gl.bindBuffer(gl.ARRAY_BUFFER, buf.b); gl.vertexAttribPointer(U.aB, 4, gl.FLOAT, false, 0, 0);
+  gl.uniform1f(U.uPass, 1); gl.drawArrays(gl.POINTS, 0, buf.n);
+  gl.uniform1f(U.uPass, 0); gl.drawArrays(gl.POINTS, 0, buf.n);
+}
+
+/* ---------- life cycle, in step with Jarvis's face on the other monitor ----------
+   hidden (asleep: a pulsing standby orb) -> forming -> shown -> dissolving -> hidden */
+const FORM_S = 4.8, DISS_S = 2.8;
+const T0 = performance.now();
+const PH = { state: "hidden", t0: performance.now(), known: false };
+function setState(s) { PH.state = s; PH.t0 = performance.now(); }
+function ringYaw(t) {
+  const nowMin = minsOf(new Date());
+  return -((nowMin / 1440) * Math.PI * 2) - 0.32 + (reduce ? 0 : Math.sin(t * 0.07) * 0.12);
+}
+function placeClock(yaw) {
+  const c = project(0, HOVER, 0, yaw), clock = $("clock");
+  clock.style.left = c.x + "px"; clock.style.top = c.y + "px";
+}
+function startForming() {
+  renderLists(); tick();
+  placeClock(ringYaw((performance.now() - T0) / 1000));   // the letters are sampled where they will stand
+  if (gl) buildText();
+  setState("forming");
+}
+function listenToJarvis() {
+  let es;
+  try { es = new EventSource("/events"); } catch (e) { return; }
+  es.onmessage = (ev) => {
+    const sleeping = JSON.parse(ev.data).s === "sleeping";
+    PH.known = true;
+    if (sleeping && (PH.state === "shown" || PH.state === "forming")) setState("dissolving");
+    else if (!sleeping && (PH.state === "hidden" || PH.state === "dissolving")) startForming();
+  };
+}
+
+function frame(now) {
+  const t = (now - T0) / 1000;
+  const since = (now - PH.t0) / 1000;
+  if (PH.state === "forming" && since > FORM_S + 0.9) setState("shown");
+  if (PH.state === "dissolving" && since > DISS_S) setState("hidden");
+  const nowD = new Date(), nowMin = minsOf(nowD);
+  const yaw = ringYaw(t);
+  const st = PH.state;
+
+  // how far each layer is shown
+  const formT = st === "forming" ? since : st === "dissolving" ? FORM_S * (1 - since / DISS_S) : 0;
+  const settled = st === "shown" ? 1 : st === "forming" ? ss((since - (FORM_S - 1.0)) / 1.0) : st === "dissolving" ? 1 - ss(since / 0.4) : 0;
+  const htmlA = settled;
+  const textA = st === "forming" ? 1 - ss((since - FORM_S) / 0.8) : st === "dissolving" ? 1 : 0;
+  $("standby").style.opacity = st === "hidden" ? 1 : st === "dissolving" ? ss((since - DISS_S + 0.8) / 0.8) : st === "forming" ? 1 - ss(since / 0.5) : 0;
+  document.querySelector(".stage").style.opacity = htmlA;
+
+  // ------- particles -------
+  if (gl) {
+    gl.clear(gl.COLOR_BUFFER_BIT);
+    const evs = DATA.events.slice(0, 8);
+    const nextEv = DATA.events.filter((e) => e.start >= nowMin).sort((a, b) => a.start - b.start)[0];
+    const arr = new Float32Array(32);
+    evs.forEach((e, i) => {
+      const past = e.start + e.duration <= nowMin, hot = e === nextEv || (e.start <= nowMin && !past);
+      arr.set([e.start, Math.min(1440, e.start + Math.max(e.duration, 20)), hot ? 2 : past ? 1 : 0, 0], i * 4);
+    });
+    gl.uniform4fv(U.uEv, arr); gl.uniform1f(U.uEvN, evs.length);
+    gl.uniform2f(U.uRes, W, H); gl.uniform2f(U.uC, center.x, center.y); gl.uniform2f(U.uOrb, center.x, center.y);
+    gl.uniform1f(U.uR, R); gl.uniform1f(U.uYaw, yaw); gl.uniform1f(U.uGy, reduce ? 0 : t * 0.12);
+    gl.uniform1f(U.uT, reduce ? 0 : t); gl.uniform1f(U.uNow, nowMin); gl.uniform1f(U.uDpr, GDPR);
+    gl.uniform1f(U.uForm, formT); gl.uniform1f(U.uMode, st === "shown" ? 0 : st === "hidden" ? 2 : 1);
+    gl.uniform1f(U.uTextA, textA);
+    drawBuf(STATIC);
+    if (st === "forming" || st === "dissolving") drawBuf(TEXT);
+  }
+
+  // ------- 2D: hour numbers, event labels, the now-beacon (once the ring has formed) -------
+  cx.clearRect(0, 0, W, H);
+  if (settled > 0.01) {
+    cx.save();
+    cx.globalAlpha = settled;
+    cx.lineCap = "round";
+    for (let h = 0; h < 24; h += 3) {
+      const l = project(...ringPt(h * 60, 1.16), yaw);
+      cx.globalAlpha = 0.85 * depthAlpha(l.z) * settled;
+      cx.fillStyle = "#DDF3FF";
+      cx.font = `500 ${Math.round(15 * l.k * Math.max(1, H / 1100))}px Oxanium, sans-serif`;
+      cx.textAlign = "center"; cx.textBaseline = "middle";
+      cx.fillText(pad(h), l.x, l.y);
+    }
+    const placed = [];
+    const nextEv = DATA.events.filter((e) => e.start >= nowMin).sort((a, b) => a.start - b.start)[0];
+    for (const e of DATA.events) {
+      const past = e.start + e.duration <= nowMin;
+      const hot = e === nextEv || (e.start <= nowMin && !past);
+      const top = project(...ringPt(e.start, 1.0, 0.06), yaw);
+      if (top.z >= 0.3 || past) continue;
+      const col = hot ? "#FFB54A" : "#7FE3FF";
+      const fs = Math.round(16 * top.k * Math.max(1, H / 1100));
+      const title = e.title.length > 28 ? e.title.slice(0, 27) + "…" : e.title;
+      cx.font = `500 ${fs}px Manrope, sans-serif`;
+      const w = Math.max(cx.measureText(title).width, fs * 3) + fs;
+      let up = 0.26, lab;
+      for (let i = 0; i < 8; i++, up += 0.16) {
+        lab = project(...ringPt(e.start, 1.0, 0.06 + up), yaw);
+        const box = { l: lab.x - w / 2, r: lab.x + w / 2, t: lab.y - fs * 2.4, b: lab.y + fs * 0.3 };
+        if (!placed.some((q) => box.l < q.r && box.r > q.l && box.t < q.b && box.b > q.t)) { placed.push(box); break; }
+      }
+      cx.globalAlpha = 0.35 * settled; cx.strokeStyle = col; cx.lineWidth = 1;
+      cx.beginPath(); cx.moveTo(top.x, top.y); cx.lineTo(lab.x, lab.y + fs * 0.2); cx.stroke();
+      cx.globalAlpha = depthAlpha(lab.z) * settled;
+      cx.textAlign = "center"; cx.textBaseline = "bottom";
+      cx.fillStyle = col; cx.font = `500 ${fs}px Oxanium, sans-serif`;
+      cx.fillText(`${pad(Math.floor(e.start / 60))}:${pad(Math.floor(e.start % 60))}`, lab.x, lab.y - fs * 1.15);
+      cx.fillStyle = "#DDF3FF"; cx.font = `500 ${fs}px Manrope, sans-serif`;
+      cx.fillText(title, lab.x, lab.y);
+    }
+    const p = project(...ringPt(nowMin, 1.0), yaw), top = project(...ringPt(nowMin, 1.0, 0.34), yaw);
+    const gr = cx.createLinearGradient(p.x, p.y, top.x, top.y);
+    gr.addColorStop(0, "rgba(255,181,74,0.9)"); gr.addColorStop(1, "rgba(255,181,74,0)");
+    cx.globalAlpha = settled; cx.strokeStyle = gr; cx.lineWidth = 2;
+    cx.beginPath(); cx.moveTo(p.x, p.y); cx.lineTo(top.x, top.y); cx.stroke();
+    const pulse = reduce ? 0 : (Math.sin(t * 2.4) + 1) / 2;
+    cx.fillStyle = "#FFB54A"; cx.shadowColor = "#FFB54A"; cx.shadowBlur = 24;
+    cx.beginPath(); cx.arc(p.x, p.y, 6 + pulse * 3, 0, Math.PI * 2); cx.fill();
+    cx.shadowBlur = 0;
+    cx.globalAlpha = 0.35 * (1 - pulse) * settled;
+    cx.strokeStyle = "#FFB54A"; cx.lineWidth = 1.5;
+    cx.beginPath(); cx.arc(p.x, p.y, 10 + pulse * 22, 0, Math.PI * 2); cx.stroke();
+    cx.restore();
+  }
+
+  placeClock(yaw);
+  $("clock").style.opacity = htmlA;
+  requestAnimationFrame(frame);
+}
+
+resize();
+initGL();
+renderLists();
+tick();
+poll();
+setInterval(tick, 1000);
+setInterval(renderLists, 30000);
+setInterval(poll, 15000);
+listenToJarvis();
+// no word from Jarvis (opened on its own, server down): just form once
+setTimeout(() => { if (!PH.known && PH.state === "hidden") startForming(); }, 1500);
+requestAnimationFrame(frame);
+</script>
+</body>
+</html>

@@ -67,9 +67,11 @@ class CompactBar(QWidget):
         self._phase = 0.0
         self._bar_phases = [i * 0.9 for i in range(_BAR_COUNT)]
         self._watching = False   # tools/screen_watch.py, via screen_watch_bridge.py
+        self._opacity = 0.0
+        self._fade_target = 0.0   # eased every tick -- show/hide fade in/out instead of popping
 
         self._show_sig.connect(self._show_bar)
-        self._hide_sig.connect(self.hide)
+        self._hide_sig.connect(self._start_hide)
         self._state_sig.connect(self._set_state)
         self._watch_sig.connect(self._set_watching)
 
@@ -78,10 +80,17 @@ class CompactBar(QWidget):
         self._timer.start(33)  # ~30fps -- plenty for a small indicator, cheap while idle
 
     def _show_bar(self) -> None:
-        screen = QApplication.primaryScreen().availableGeometry()
-        self.move((screen.width() - _WIDTH) // 2, screen.y() + _TOP_MARGIN)
-        self.show()
-        self.raise_()
+        if not self.isVisible():
+            screen = QApplication.primaryScreen().availableGeometry()
+            self.move((screen.width() - _WIDTH) // 2, screen.y() + _TOP_MARGIN)
+            self.setWindowOpacity(0.0)
+            self._opacity = 0.0
+            self.show()
+            self.raise_()
+        self._fade_target = 1.0
+
+    def _start_hide(self) -> None:
+        self._fade_target = 0.0
 
     def _set_state(self, state: str) -> None:
         self.state = state
@@ -95,11 +104,22 @@ class CompactBar(QWidget):
 
     def _step(self) -> None:
         target_energy, target_warmth = _STATE_TARGETS.get(self.state, _DEFAULT_TARGET)
-        self._energy = self._ease_toward(self._energy, target_energy)
-        self._warmth = self._ease_toward(self._warmth, target_warmth)
-        self._phase = (self._phase + 0.12) % (math.pi * 2)
+        # Sleeping eases (and pulses) noticeably slower than any other state --
+        # it reads as winding down rather than an abrupt cut to a dim bar.
+        calm = self.state == "SLEEPING"
+        rate = 0.05 if calm else 0.12
+        self._energy = self._ease_toward(self._energy, target_energy, rate)
+        self._warmth = self._ease_toward(self._warmth, target_warmth, rate)
+        self._phase = (self._phase + (0.05 if calm else 0.12)) % (math.pi * 2)
+        # Fade in/out instead of popping visible/hidden -- the fade plays out
+        # fully (bar keeps calming toward SLEEPING while it fades) before the
+        # window actually hides.
+        self._opacity += (self._fade_target - self._opacity) * 0.10
         if self.isVisible():
+            self.setWindowOpacity(max(0.0, min(1.0, self._opacity)))
             self.update()
+        if self._fade_target == 0.0 and self._opacity < 0.02 and self.isVisible():
+            self.hide()
 
     def paintEvent(self, _):
         p = QPainter(self)
@@ -213,8 +233,13 @@ class CameraPanel(QWidget):
         self._timer.timeout.connect(self._step)
         self._timer.start(33)
 
-    @staticmethod
-    def _anchor_pos() -> tuple[int, int]:
+    # hud_bar.py sets this when the bar isn't shown (the 3D head lives in the
+    # corner instead): () -> (x, y) top-left for the preview.
+    anchor_fn = None
+
+    def _anchor_pos(self) -> tuple[int, int]:
+        if self.anchor_fn is not None:
+            return self.anchor_fn()
         screen = QApplication.primaryScreen().availableGeometry()
         x = screen.x() + (screen.width() - _CAM_W) // 2
         y = screen.y() + _TOP_MARGIN + _HEIGHT + _CAM_GAP

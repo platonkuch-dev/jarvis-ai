@@ -11,7 +11,7 @@ import random
 import time
 
 from PyQt6.QtCore import QPointF, QRectF, QSize, Qt, QTimer, pyqtSignal
-from PyQt6.QtGui import QBrush, QFont, QPainter, QPainterPath, QPen, QRadialGradient
+from PyQt6.QtGui import QBrush, QFont, QLinearGradient, QPainter, QPainterPath, QPen, QRadialGradient
 from PyQt6.QtWidgets import QSizePolicy, QWidget
 
 from ui import fonts as _fonts
@@ -81,6 +81,21 @@ class HudCanvas(QWidget):
 
     node_clicked = pyqtSignal(str)
 
+    @staticmethod
+    def _clamp(value: float, minimum: float = 0.0, maximum: float = 1.0) -> float:
+        return max(minimum, min(maximum, value))
+
+    @classmethod
+    def _ease(cls, value: float) -> float:
+        value = cls._clamp(value)
+        return value * value * (3.0 - 2.0 * value)
+
+    @classmethod
+    def _spring(cls, value: float) -> float:
+        """A restrained overshoot so assembled particles settle organically."""
+        value = cls._clamp(value)
+        return 1.0 + (value - 1.0) * math.exp(-5.2 * value) * math.cos(12.0 * value)
+
     def __init__(self, face_path: str, parent=None):
         super().__init__(parent)
         self.setAttribute(Qt.WidgetAttribute.WA_OpaquePaintEvent)
@@ -121,6 +136,13 @@ class HudCanvas(QWidget):
         # there statically the whole time.
         self._face_assembly = 0.0
         self._prev_speaking = False
+        self._startup_active = False
+        self._startup_progress = 0.0
+        self._security_scan_active = False
+        self._security_scan_message = ""
+        self._scan_theme = 0.0
+        self._power_mode = False
+        self._power_theme = 0.0
 
         self._particles: list[dict] = []
         self._face_geom = (0.0, 0.0, 0.0, 0.0)  # cx, cy, rx, ry
@@ -147,6 +169,22 @@ class HudCanvas(QWidget):
         pattern as _log_sig/_state_sig/_content_sig, never directly from a
         background thread."""
         self._node_status.update(status)
+        self.update()
+
+    def begin_startup_sequence(self) -> None:
+        """Reveal the face only after the splash closes, while the HUD is visible."""
+        self._startup_progress = 0.0
+        self._startup_active = True
+        self._pulses.clear()
+        self._sparks.clear()
+
+    def set_security_scan(self, active: bool, message: str) -> None:
+        self._security_scan_active = active
+        self._security_scan_message = message
+        self.update()
+
+    def set_power_mode(self, active: bool) -> None:
+        self._power_mode = active
         self.update()
 
     def mousePressEvent(self, event) -> None:
@@ -184,8 +222,15 @@ class HudCanvas(QWidget):
         particles: list[dict] = []
 
         def push(x, y, layer, warm_bias):
+            target_angle = math.atan2((y - cy) / max(1.0, ry), (x - cx) / max(1.0, rx))
+            if abs(x - cx) < rx * 0.12 and abs(y - cy) < ry * 0.12:
+                target_angle = random.uniform(0, math.tau)
+            scatter_radius = fw * random.uniform(0.78, 1.22)
             particles.append({
                 "bx": x, "by": y,
+                "scatter_x": cx + math.cos(target_angle) * scatter_radius,
+                "scatter_y": cy + math.sin(target_angle) * scatter_radius,
+                "arrival_delay": random.uniform(0.03, 0.40),
                 "ang": random.uniform(0, math.tau),
                 "spd": random.uniform(0.4, 1.3),
                 "r": (1.0 if layer == "core" else 1.5) + random.uniform(0, 1.0),
@@ -310,6 +355,16 @@ class HudCanvas(QWidget):
         self._tgt_energy, self._tgt_warmth = target
         self._energy += (self._tgt_energy - self._energy) * 0.06
         self._warmth += (self._tgt_warmth - self._warmth) * 0.05
+        scan_target = 1.0 if self._security_scan_active else 0.0
+        self._scan_theme += (scan_target - self._scan_theme) * 0.045
+        power_target = 1.0 if self._power_mode else 0.0
+        self._power_theme += (power_target - self._power_theme) * 0.055
+
+        if self._startup_active:
+            self._startup_progress = min(1.0, self._startup_progress + dt / 2.15)
+            if self._startup_progress >= 1.0:
+                self._startup_active = False
+                self._pulses.append({"life": 0.0, "max_life": 1.5})
 
         # mouth: retarget on a short, speech-like cadence while speaking;
         # otherwise ease down to a near-closed resting line
@@ -322,11 +377,12 @@ class HudCanvas(QWidget):
         mouth_sp = 0.5 if self.speaking else 0.12
         self._mouth_open += (self._tgt_mouth_open - self._mouth_open) * mouth_sp
 
-        # face assembly — eyes/mouth fly in from the ambient particle field
-        # the instant a response starts speaking (fast ease-in), and settle
-        # back out once it ends (slower ease-out, less abrupt).
-        asm_target = 1.0 if self.speaking else 0.0
-        asm_rate = 0.16 if self.speaking else 0.045
+        # The face assembles visibly after the splash, then stays quietly
+        # present in idle mode. Speaking completes the assembly and gives
+        # the eyes/mouth their full intensity.
+        idle_assembly = 0.72 if self._startup_progress >= 1.0 else self._startup_progress
+        asm_target = 1.0 if self.speaking else idle_assembly
+        asm_rate = 0.16 if self.speaking else 0.055
         self._face_assembly += (asm_target - self._face_assembly) * asm_rate
         if self.speaking and not self._prev_speaking:
             # rising edge: response just started — give the materialization
@@ -336,13 +392,13 @@ class HudCanvas(QWidget):
                 self._spawn_spark()
         self._prev_speaking = self.speaking
 
-        self._orbit_angle += dt * (0.35 + self._energy * 1.6)
+        self._orbit_angle += dt * (0.35 + self._energy * 1.6 + self._power_theme * 2.8)
 
         # pulse rings — spawn faster and reach further as energy climbs
         self._pulse_timer -= dt
         if self._pulse_timer <= 0:
             self._pulses.append({"life": 0.0, "max_life": random.uniform(1.1, 1.6)})
-            self._pulse_timer = max(0.35, 1.7 - self._energy * 1.5 - self._warmth * 0.6)
+            self._pulse_timer = max(0.18, 1.7 - self._energy * 1.5 - self._warmth * 0.6 - self._power_theme * 0.7)
         for pr in self._pulses:
             pr["life"] += dt
         self._pulses = [pr for pr in self._pulses if pr["life"] < pr["max_life"]]
@@ -351,7 +407,7 @@ class HudCanvas(QWidget):
         self._spark_timer -= dt
         if self._spark_timer <= 0 and (self._warmth > 0.15 or self._energy > 0.5):
             self._spawn_spark()
-            self._spark_timer = max(0.03, 0.5 - self._warmth * 0.44 - self._energy * 0.06)
+            self._spark_timer = max(0.025, 0.5 - self._warmth * 0.44 - self._energy * 0.06 - self._power_theme * 0.22)
         for sk in self._sparks:
             sk["life"] += dt
             sk["x"] += sk["vx"] * dt * 60 * (0.4 + self._energy)
@@ -385,24 +441,52 @@ class HudCanvas(QWidget):
         fw = min(W, H)
         t = time.time() - self._t0
         energy, warmth = self._energy, self._warmth
+        startup_raw = self._clamp((self._startup_progress - 0.04) / 0.72)
+        startup = self._ease(startup_raw)
 
-        PRI = (0x7F, 0xE3, 0xFF)
-        ACC = (0xFF, 0x9D, 0x6B)
+        PRI = self._mix((0x7F, 0xE3, 0xFF), (0x45, 0xFF, 0x9A), self._scan_theme)
+        ACC = self._mix((0xFF, 0x9D, 0x6B), (0x00, 0xC8, 0x6A), self._scan_theme)
+        PRI = self._mix(PRI, (0xFF, 0xB3, 0x38), self._power_theme)
+        ACC = self._mix(ACC, (0xFF, 0x5B, 0x36), self._power_theme)
 
-        # soft radial backdrop — a touch of depth, never a hard edge
+        # Layered mica-like backdrop for a restrained Windows 11 dark surface.
         bg = QRadialGradient(cx, cy * 0.9, fw * 1.15)
-        bg.setColorAt(0.0, qcol("#101822"))
+        base_core = self._mix((0x16, 0x21, 0x2D), (0x08, 0x2A, 0x18), self._scan_theme)
+        base_mid = self._mix((0x0D, 0x15, 0x1E), (0x05, 0x17, 0x0D), self._scan_theme)
+        bg.setColorAt(0.0, rgbcol(self._mix(base_core, (0x38, 0x0C, 0x0E), self._power_theme)))
+        bg.setColorAt(0.38, rgbcol(self._mix(base_mid, (0x18, 0x05, 0x08), self._power_theme)))
         bg.setColorAt(0.7, qcol(C.BG))
         bg.setColorAt(1.0, qcol(C.BG))
         p.fillRect(self.rect(), bg)
 
+        # Power Mode gets a moving alert field behind the face.
+        if self._power_theme > 0.02:
+            stripe_alpha = int(42 * self._power_theme)
+            p.setPen(QPen(rgbcol((0xFF, 0x42, 0x36), stripe_alpha), 1.2))
+            offset = (t * 95) % 48
+            for x in range(-H, W + H, 48):
+                p.drawLine(QPointF(x + offset, 0), QPointF(x + H + offset, H))
+
+        # Fine grid grounds the animation without competing with the face.
+        grid_alpha = int((13 + energy * 13 + self._power_theme * 22) * (0.15 + startup * 0.85))
+        grid_color = self._mix((0x16, 0x35, 0x41), (0x78, 0x16, 0x18), self._power_theme)
+        p.setPen(QPen(rgbcol(grid_color, grid_alpha), 1))
+        grid_step = max(36, int(fw / 12))
+        for x in range(0, W, grid_step):
+            p.drawLine(x, 0, x, H)
+        for y in range(0, H, grid_step):
+            p.drawLine(0, y, W, y)
+
         # ambient halo behind the whole face, brightens with warmth/energy
-        accent = C.MUTED_C if self.muted else C.PRI
-        halo_a = int(max(0, min(255, 60 + energy * 90 + warmth * 60)))
+        accent = C.MUTED_C if self.muted else PRI
+        halo_a = int(max(0, min(255, (60 + energy * 90 + warmth * 60) * startup)))
         halo = QRadialGradient(cx, cy, rx * 2.4)
-        halo.setColorAt(0.0,  qcol(accent, int(halo_a * 0.5)))
-        halo.setColorAt(0.45, qcol(accent, int(halo_a * 0.14)))
-        halo.setColorAt(1.0,  qcol(accent, 0))
+        accent_col = qcol(accent, int(halo_a * 0.5)) if isinstance(accent, str) else rgbcol(accent, int(halo_a * 0.5))
+        accent_dim = qcol(accent, int(halo_a * 0.14)) if isinstance(accent, str) else rgbcol(accent, int(halo_a * 0.14))
+        accent_clear = qcol(accent, 0) if isinstance(accent, str) else rgbcol(accent, 0)
+        halo.setColorAt(0.0, accent_col)
+        halo.setColorAt(0.45, accent_dim)
+        halo.setColorAt(1.0, accent_clear)
         p.setPen(Qt.PenStyle.NoPen)
         p.setBrush(halo)
         p.drawEllipse(QRectF(cx - rx * 2.4, cy - ry * 2.4, rx * 4.8, ry * 4.8))
@@ -413,7 +497,7 @@ class HudCanvas(QWidget):
             prad = rx * (0.95 + pf * (2.4 + energy * 1.6))
             palpha = (1 - pf) * (0.16 + warmth * 0.18 + energy * 0.06)
             pc = self._mix(PRI, ACC, warmth)
-            p.setPen(QPen(rgbcol(pc, int(255 * palpha)), 1.1))
+            p.setPen(QPen(rgbcol(pc, int(255 * palpha * (1 + self._power_theme * 0.7))), 1.1 + self._power_theme * 1.1))
             p.setBrush(Qt.BrushStyle.NoBrush)
             p.drawEllipse(QRectF(cx - prad, cy - prad * (ry / rx), prad * 2, prad * 2 * (ry / rx)))
 
@@ -424,12 +508,22 @@ class HudCanvas(QWidget):
         for s in range(ORBIT_SEGMENTS):
             seg_len = (math.tau / ORBIT_SEGMENTS) * 0.55
             a0 = self._orbit_angle + (s / ORBIT_SEGMENTS) * math.tau
-            seg_alpha = (0.12 + energy * 0.22) * (0.4 + 0.6 * abs(math.sin(s * 1.7 + self._orbit_angle * 1.3)))
+            seg_alpha = startup * (0.12 + energy * 0.22) * (0.4 + 0.6 * abs(math.sin(s * 1.7 + self._orbit_angle * 1.3)))
             path = QPainterPath()
             path.arcMoveTo(QRectF(cx - orbit_r, cy - orbit_ry, orbit_r * 2, orbit_ry * 2), math.degrees(-a0))
             path.arcTo(QRectF(cx - orbit_r, cy - orbit_ry, orbit_r * 2, orbit_ry * 2), math.degrees(-a0), -math.degrees(seg_len))
             p.setPen(QPen(rgbcol(oc, int(255 * seg_alpha)), 1.3))
             p.drawPath(path)
+
+        if self._power_theme > 0.02:
+            for ring_scale, speed, alpha in ((1.78, -1.6, 0.46), (2.06, 2.45, 0.25)):
+                ring_r, ring_ry = rx * ring_scale, ry * ring_scale
+                phase = self._orbit_angle * speed
+                p.setBrush(Qt.BrushStyle.NoBrush)
+                p.setPen(QPen(rgbcol((0xFF, 0x5B, 0x36), int(255 * alpha * self._power_theme)), 1.0))
+                for segment in range(6):
+                    angle = math.degrees(phase + segment * math.tau / 6)
+                    p.drawArc(QRectF(cx - ring_r, cy - ring_ry, ring_r * 2, ring_ry * 2), int(-angle * 16), int(-28 * 16))
 
         # subsystem constellation — real JARVIS components orbiting the
         # core; a filament connects each to the orbit ring, an outlined dot
@@ -442,7 +536,7 @@ class HudCanvas(QWidget):
             online = self._node_status.get(node_id, True)
             hovered = self._node_hover == node_id
             node_color = self._mix(PRI, ACC, warmth * 0.5) if online else (0x55, 0x62, 0x70)
-            line_alpha = (0.16 if online else 0.08) + (0.12 if hovered else 0.0)
+            line_alpha = startup * ((0.16 if online else 0.08) + (0.12 if hovered else 0.0))
             p.setPen(QPen(rgbcol(node_color, int(255 * line_alpha)), 1.0))
             edge_t = math.atan2(ny - cy, nx - cx)
             edge_x = cx + math.cos(edge_t) * rx * 1.45
@@ -451,7 +545,7 @@ class HudCanvas(QWidget):
 
             dot_r = (5.5 if hovered else 4.0) if online else 3.2
             p.setPen(Qt.PenStyle.NoPen if online else QPen(rgbcol(node_color, 200), 1.2))
-            p.setBrush(QBrush(rgbcol(node_color, 235 if online else 40)))
+            p.setBrush(QBrush(rgbcol(node_color, int((235 if online else 40) * startup))))
             p.drawEllipse(QPointF(nx, ny), dot_r, dot_r)
             if hovered:
                 p.setPen(Qt.PenStyle.NoPen)
@@ -463,7 +557,7 @@ class HudCanvas(QWidget):
             align = Qt.AlignmentFlag.AlignLeft if nx >= cx else Qt.AlignmentFlag.AlignRight
             text_w = 130
             box_x = label_x if nx >= cx else label_x - text_w
-            text_color = qcol(C.TEXT_MED, 235 if (online or hovered) else 120)
+            text_color = qcol(C.TEXT_MED, int((235 if (online or hovered) else 120) * startup))
             p.setPen(QPen(text_color, 1))
             p.drawText(QRectF(box_x, ny - 8, text_w, 16), align | Qt.AlignmentFlag.AlignVCenter, label)
 
@@ -477,17 +571,21 @@ class HudCanvas(QWidget):
                 dx, dy = hp["bx"] - hq["bx"], hp["by"] - hq["by"]
                 d2 = dx * dx + dy * dy
                 if d2 < thresh2:
-                    a = (1 - d2 / thresh2) * 0.10 * (0.5 + energy)
+                    a = startup * (1 - d2 / thresh2) * 0.10 * (0.5 + energy)
                     p.setPen(QPen(rgbcol(col, int(255 * a)), 0.6))
                     p.drawLine(QPointF(hp["bx"], hp["by"]), QPointF(hq["bx"], hq["by"]))
 
         # head particles — drift + twinkle
-        amp = 2.2 + energy * 7.5
+        amp = 2.2 + energy * 7.5 + self._power_theme * 6.5
         for pt in head_pts:
             drift_t = t * pt["spd"]
             dx = math.cos(drift_t + pt["ang"]) * amp * (0.7 if pt["layer"] == "core" else 1.0)
             dy = math.sin(drift_t * 1.3 + pt["ang"]) * amp * (0.55 if pt["layer"] == "core" else 0.9)
-            x, y = pt["bx"] + dx, pt["by"] + dy
+            arrival_raw = self._clamp((startup - pt["arrival_delay"]) / 0.52)
+            arrival = self._spring(arrival_raw)
+            tx, ty = pt["bx"] + dx, pt["by"] + dy
+            x = pt["scatter_x"] + (tx - pt["scatter_x"]) * arrival
+            y = pt["scatter_y"] + (ty - pt["scatter_y"]) * arrival
 
             w = min(1.0, warmth + pt["warm_bias"] * warmth * 1.4)
             c = self._mix(PRI, ACC, w)
@@ -495,8 +593,9 @@ class HudCanvas(QWidget):
             pulse = 0.75 + math.sin(drift_t * 2 + pt["ang"]) * 0.25 * (0.4 + energy)
             twinkle_wave = math.sin(t * pt["twinkle_spd"] + pt["twinkle"])
             twinkle_boost = max(0.0, (twinkle_wave - 0.92) / 0.08)
-            alpha = max(0.03, min(1.0, base_alpha * pulse * (0.55 + energy * 0.6) + twinkle_boost * 0.5))
-            r = pt["r"] * (0.85 + energy * 0.5) * (1 + twinkle_boost * 0.9)
+            visible_arrival = self._clamp(arrival)
+            alpha = visible_arrival * max(0.03, min(1.0, base_alpha * pulse * (0.55 + energy * 0.6) + twinkle_boost * 0.5))
+            r = pt["r"] * visible_arrival * (0.85 + energy * 0.5) * (1 + twinkle_boost * 0.9)
 
             p.setPen(Qt.PenStyle.NoPen)
             p.setBrush(QBrush(rgbcol(c, int(255 * alpha))))
@@ -554,6 +653,34 @@ class HudCanvas(QWidget):
                 p.setBrush(QBrush(rgbcol(ec, int(255 * max(0.0, alpha)))))
                 p.drawEllipse(QPointF(x, y), pt["r"] * (0.6 + eye_scale * 0.5), pt["r"] * (0.6 + eye_scale * 0.5))
 
+        # Startup scan: a moving visor locks onto the forming head. Its main
+        # line, vertical acquisition beam, and scan-zone glow fade away once
+        # initialization hands off to the live HUD.
+        if self._startup_active:
+            scan_progress = self._ease(self._clamp((self._startup_progress - 0.10) / 0.78))
+            scan_y = cy - ry * 1.16 + scan_progress * ry * 2.32
+            scan = QLinearGradient(0, scan_y - 24, 0, scan_y + 24)
+            scan.setColorAt(0.0, qcol(C.PRI, 0))
+            scan.setColorAt(0.42, qcol(C.PRI, 0))
+            scan.setColorAt(0.49, qcol(C.PRI, 105))
+            scan.setColorAt(0.5, qcol(C.WHITE, 230))
+            scan.setColorAt(0.51, qcol(C.PRI, 105))
+            scan.setColorAt(0.58, qcol(C.PRI, 0))
+            scan.setColorAt(1.0, qcol(C.PRI, 0))
+            p.setPen(Qt.PenStyle.NoPen)
+            p.setBrush(scan)
+            p.drawRect(QRectF(cx - rx * 1.28, scan_y - 24, rx * 2.56, 48))
+
+            visor_x = cx + math.sin(self._startup_progress * math.tau * 4.6) * rx * 0.62
+            p.setPen(QPen(qcol(C.PRI, 110), 1))
+            p.drawLine(QPointF(visor_x, cy - ry * 1.10), QPointF(visor_x, cy + ry * 1.10))
+            p.setPen(QPen(qcol(C.WHITE, 190), 1.5))
+            p.drawLine(QPointF(cx - rx * 1.12, scan_y), QPointF(cx + rx * 1.12, scan_y))
+            p.setBrush(Qt.BrushStyle.NoBrush)
+            p.setPen(QPen(qcol(C.PRI, 150), 1.2))
+            scan_r = rx * (0.18 + self._startup_progress * 0.78)
+            p.drawEllipse(QPointF(cx, cy), scan_r, scan_r * (ry / rx))
+
         # sparks — ejected from the core, density follows warmth
         for sk in self._sparks:
             sf = sk["life"] / sk["max_life"]
@@ -563,6 +690,39 @@ class HudCanvas(QWidget):
             p.setBrush(QBrush(rgbcol(sc, int(255 * max(0.0, salpha)))))
             sr = sk["r"] * (1 - sf * 0.4)
             p.drawEllipse(QPointF(sk["x"], sk["y"]), sr, sr)
+
+        if self._security_scan_active:
+            scan_phase = 0.5 - 0.5 * math.cos(t * math.tau * 0.72)
+            scan_y = cy - ry * 0.88 + scan_phase * ry * 1.76
+            glow = QLinearGradient(0, scan_y - 28, 0, scan_y + 28)
+            glow.setColorAt(0.0, qcol(C.GREEN, 0))
+            glow.setColorAt(0.48, qcol(C.GREEN, 28))
+            glow.setColorAt(0.50, qcol(C.GREEN, 205))
+            glow.setColorAt(0.52, qcol(C.GREEN, 28))
+            glow.setColorAt(1.0, qcol(C.GREEN, 0))
+            p.setPen(Qt.PenStyle.NoPen)
+            p.setBrush(glow)
+            p.drawRect(QRectF(cx - rx * 1.12, scan_y - 28, rx * 2.24, 56))
+            p.setPen(QPen(qcol(C.GREEN, 215), 1.4))
+            p.drawLine(QPointF(cx - rx * 1.08, scan_y), QPointF(cx + rx * 1.08, scan_y))
+            tracker_x = cx + math.sin(t * 3.7) * rx * 0.72
+            tracker_y = scan_y + math.sin(t * 7.4) * 5
+            p.setPen(QPen(qcol(C.GREEN, 140), 1))
+            p.drawLine(QPointF(tracker_x, cy - ry * 0.95), QPointF(tracker_x, cy + ry * 0.95))
+            p.setBrush(Qt.BrushStyle.NoBrush)
+            p.setPen(QPen(qcol(C.GREEN, int(90 + 80 * (0.5 + 0.5 * math.sin(t * 5.0)))), 1.0))
+            tracker_r = rx * (0.13 + 0.04 * math.sin(t * 5.0))
+            p.drawEllipse(QPointF(tracker_x, tracker_y), tracker_r, tracker_r * (ry / rx))
+            p.setFont(QFont(_fonts.MONO_FONT, 8, QFont.Weight.Bold))
+            p.setPen(QPen(qcol(C.GREEN, 235), 1))
+            p.drawText(QRectF(0, cy - ry * 1.35, W, 18), Qt.AlignmentFlag.AlignCenter, "MICROSOFT DEFENDER // SCANNING")
+
+        if self._power_theme > 0.02:
+            p.setFont(QFont(_fonts.MONO_FONT, 8, QFont.Weight.Bold))
+            p.setPen(QPen(rgbcol((0xFF, 0xB3, 0x38), int(235 * self._power_theme)), 1))
+            p.drawText(QRectF(0, cy - ry * 1.35, W, 18), Qt.AlignmentFlag.AlignCenter, "POWER MODE // ENHANCED")
+            p.setPen(QPen(rgbcol((0xFF, 0x5B, 0x36), int(180 * self._power_theme)), 1))
+            p.drawText(QRectF(0, cy + ry * 1.12, W, 16), Qt.AlignmentFlag.AlignCenter, "CORE OUTPUT // MAXIMUM")
 
         # status text
         sy = cy + fw * 0.36
@@ -586,8 +746,8 @@ class HudCanvas(QWidget):
         sub_y = sy + 27
         p.setPen(QPen(qcol(C.TEXT_DIM), 1))
         p.setFont(QFont(_fonts.UI_FONT, 9))
-        p.drawText(QRectF(0, sub_y, W, 18), Qt.AlignmentFlag.AlignCenter,
-                   'say "Jarvis" or press the mic')
+        subtitle = "Initializing neural interface" if self._startup_active else 'Say "Jarvis" or press the mic'
+        p.drawText(QRectF(0, sub_y, W, 18), Qt.AlignmentFlag.AlignCenter, subtitle)
 
         # waveform
         wy = sub_y + 24
@@ -597,8 +757,8 @@ class HudCanvas(QWidget):
             if self.muted:
                 hgt, cl = 2, qcol(C.MUTED_C, 150)
             elif self.speaking:
-                hgt = random.randint(3, 16)
-                cl  = qcol(C.PRI, 210) if hgt > 10 else qcol(C.PRI, 120)
+                hgt = random.randint(3, int(16 + self._power_theme * 16))
+                cl  = rgbcol(PRI, 220) if hgt > 10 else rgbcol(ACC, 150)
             else:
                 hgt = int(2 + 2 * math.sin(self._tick * 0.07 + i * 0.6))
                 cl  = qcol(C.BORDER_B, 170)

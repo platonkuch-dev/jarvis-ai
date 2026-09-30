@@ -80,9 +80,39 @@ All transient vision and interrupt flags (`_pending_vision`, `_vision_busy`, `_v
 ```bash
 git clone https://github.com/FatihMakes/Mark-XLVIII.git
 cd Mark-XLVIII
-pip install -r requirements.txt
-python main.py
+PowerShell -ExecutionPolicy Bypass -File .\scripts\install.ps1
+.venv\Scripts\python.exe main.py
 ```
+
+The installer creates `.venv`, installs Python requirements and
+Chromium for Playwright. Add `-Autostart` to register JARVIS for the current Windows user,
+`-SkipOptional` for the smallest install, or `-IncludeExperimental` to also
+install the frozen Rust/TypeScript prototype.
+
+On Windows, double-click `INSTALL_JARVIS.bat` in the project folder for a
+complete installation: it installs the supported runtime components, enables
+autostart for the current user, and launches JARVIS when it finishes.
+
+### Windows Autostart
+
+Register MARK XLVIII to start for the current Windows user after sign-in:
+
+```powershell
+python main.py --install-autostart
+```
+
+This creates a per-user Task Scheduler task (not just a registry Run entry):
+JARVIS launches at logon with the highest privileges your account has,
+without a console window flashing up, and Task Scheduler restarts it
+automatically (up to 3 times, one minute apart) if the process crashes.
+Because the task runs as a logon trigger for the interactive session — not
+a Session-0 Windows Service — the HUD, microphone, and windows_control
+keep working exactly as when launched by hand. Creating the task may
+prompt for administrator confirmation once, during registration.
+
+Check or remove the registration with `--autostart-status` or `--remove-autostart`.
+The assistant's local Fast Path remains available while Gemini is disconnected; requests
+outside its supported local commands wait for cloud connectivity.
 
 > ⚠️ **Installation Note:** Some OS-specific dependencies are not bundled in `requirements.txt` to keep the repo lightweight. If you hit a `ModuleNotFoundError`, install the missing package with `pip install <module_name>`.
 
@@ -96,6 +126,36 @@ python main.py
 | **Python** | 3.11 or 3.12 |
 | **Microphone** | Required for voice interaction |
 | **API Key** | Free Gemini API key (`config/api_keys.json`) |
+
+---
+
+## 🧭 JARVIS Control
+
+MARK XLVIII includes persistent local controls that can be used by voice or
+through the **Task center** button in the main window:
+
+- **Tasks:** create, list, complete, and cancel tasks.
+- **Privacy:** allow or block JARVIS access to camera, screen, browser, files,
+  messaging, or remote control. Blocked capabilities are enforced before their
+  tools run.
+- **Focus mode:** disables proactive check-ins while active.
+- **Routines:** save a named command sequence, run it on demand, or schedule it
+  daily at a time such as `09:30` while JARVIS is running.
+- **PC diagnostics:** ask JARVIS to check or diagnose the computer for a local
+  CPU, RAM, GPU, disk, process, and uptime report.
+
+### Offline Conversation With Ollama
+
+When Gemini is disconnected, simple computer commands still use Fast Path. For
+basic local conversation, install and run [Ollama](https://ollama.com), then:
+
+```powershell
+ollama pull qwen2.5:7b
+ollama serve
+```
+
+JARVIS automatically calls `http://127.0.0.1:11434/api/generate`. Override the
+endpoint or model with `JARVIS_OLLAMA_URL` and `JARVIS_OLLAMA_MODEL`.
 
 ---
 

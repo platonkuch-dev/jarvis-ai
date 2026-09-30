@@ -125,13 +125,23 @@ def check_real(name: str, args: dict, label: str, ok) -> None:
 
 
 def check_gated(name: str, args: dict, label: str) -> None:
-    result = call(name, dict(args))  # no confirmed=true
-    check(f"{label} is gated (blocked without confirmation)", "[CONFIRMATION_REQUIRED]" in result)
+    skip(label, "not run because confirmations are disabled and this action has real side effects")
 
 
 # ── SAFE/NORMAL tools, executed for real (matches AUDIT.md's methodology) ──
 
 check_real("system_status", {}, "system_status", lambda r: len(r) > 0)
+
+check_real("process_hunter", {"limit": 5}, "process_hunter", lambda r: len(r) > 0)
+
+# ghost_engine.start() is only called from main.py's run() (a real, long-lived
+# background thread), never here -- so this smoke run legitimately sees
+# scan_count==0 and gets the "still building baseline" response. That's the
+# correct, honest behavior for a cold query, not a failure -- just check it
+# doesn't crash. Real end-to-end verification (a genuine baseline + delta
+# query) happens against the live app instead, same as every other tool here
+# that depends on state a smoke run can't build in a few milliseconds.
+check_real("digital_ghost", {"action": "status"}, "digital_ghost/status (cold)", lambda r: len(r) > 0)
 
 check_real("web_search", {"query": "python asyncio", "mode": "search"}, "web_search/search", None)
 
@@ -266,8 +276,54 @@ check_gated("computer_settings", {"action": "shutdown"}, "computer_settings/shut
 check_gated("computer_settings", {"action": "restart"}, "computer_settings/restart")
 check_gated("computer_settings", {"action": "toggle_wifi"}, "computer_settings/toggle_wifi")
 check_gated("screen_process", {"angle": "camera"}, "screen_process/angle=camera")
-check_gated("window_manager", {"action": "close", "app": "Notepad"}, "window_manager/close")
+check_real("window_manager", {"action": "close", "app": "ThisAppDoesNotExist12345"}, "window_manager/close", None)
 check_gated("game_updater", {"action": "update", "shutdown_when_done": True}, "game_updater/shutdown_when_done")
+
+# hacker_terminal used to be the one tool force-gated LOCALLY in
+# core/tool_dispatch.py's _LOCALLY_GATED_TOOLS, specifically BECAUSE the
+# shared GATED_LEVELS gate that neuters every check_gated() call above is
+# empty. At the user's explicit request (2026-09-03), _LOCALLY_GATED_TOOLS
+# is now empty too -- hacker_terminal runs on the first unconfirmed call,
+# same as everything else except computer_settings' "shutdown". Confirm
+# that directly (a harmless echo either way, so safe to actually call).
+try:
+    _ht_result = call("hacker_terminal", {"command": "echo smoke-test-marker-12345"})
+    check(
+        "hacker_terminal runs immediately with no confirmation needed "
+        "(local gate removed per user request 2026-09-03)",
+        "smoke-test-marker-12345" in _ht_result,
+    )
+except Exception as e:
+    check(f"hacker_terminal unconfirmed execution (exception: {e})", False)
+
+# actions/computer_settings.py's _LOCALLY_GATED_ACTIONS used to cover
+# restart/shutdown/toggle_wifi/dark_mode/lock_screen/sleep_display; at the
+# user's explicit request (2026-09-03) only "shutdown" is still gated --
+# every other action, including restart and toggle_wifi, now runs for
+# real on the first unconfirmed call. This is not a hypothetical: an
+# earlier version of this exact loop called "restart" and "toggle_wifi"
+# through the real dispatcher expecting the (since-removed) local gate to
+# block them -- it didn't, and the machine actually restarted twice as a
+# side effect of running this test suite. Only test the ONE action that's
+# still genuinely gated for real; the rest are skipped like check_gated(),
+# not called, because there is nothing left to catch them.
+try:
+    _cs_result = call("computer_settings", {"action": "shutdown"})
+    check(
+        "computer_settings/shutdown without confirmed=true is blocked "
+        "(the one action still locally gated, per the user's request)",
+        "[CONFIRMATION_REQUIRED]" in _cs_result,
+    )
+except Exception as e:
+    check(f"computer_settings/shutdown unconfirmed gate (exception: {e})", False)
+
+for _cs_action in ("restart", "toggle_wifi"):
+    skip(
+        f"computer_settings/{_cs_action}",
+        "no longer gated (user request 2026-09-03) -- calling for real would "
+        "actually restart the machine / flip its WiFi adapter as a side "
+        "effect of running the test suite",
+    )
 
 # Regression guard for the specific bug this session found and fixed:
 # actions/computer_settings.py has its OWN independent confirmed=yes check
@@ -295,16 +351,21 @@ except Exception as e:
 # action via its fuzzy _detect_action() fallback -- but the fuzzy match runs
 # INSIDE this function, after core/tool_dispatch.py's outer risk gate already
 # looked at (and, for a misspelling, waved through) the ORIGINAL unrecognized
-# string. A misspelled SENSITIVE/DANGEROUS action must still be gated once
-# fuzzy-corrected, or it would execute with no confirmation ever asked --
-# this calls computer_settings() directly (bypassing the outer gate on
-# purpose, same as check_real does) to prove the INNER gate alone catches it.
+# string. A misspelled action landing on the one still-gated action
+# ("shutdown") must still be gated once fuzzy-corrected, or it would execute
+# with no confirmation ever asked -- this calls computer_settings() directly
+# (bypassing the outer gate on purpose, same as check_real does) to prove the
+# INNER gate alone catches it. Deliberately targets "shutdown", not
+# "toggle_wifi" (used here previously) -- toggle_wifi is no longer gated at
+# all (see above), so fuzzy-correcting into it would flip the machine's real
+# WiFi adapter as a side effect of running this test suite.
 try:
-    _fuzzy_result = call("computer_settings", {"action": "turn_off_wifi", "description": "turn off the wifi"})
+    _fuzzy_result = call("computer_settings", {"action": "turn_off_pc", "description": "turn off the computer"})
     check(
-        "computer_settings fuzzy-corrects an unrecognized SENSITIVE-sounding action "
-        "and still gates it (regression guard: the inner gate must re-check the "
-        "CORRECTED action, not just trust whatever Gemini originally sent)",
+        "computer_settings fuzzy-corrects an unrecognized action landing on "
+        "the still-gated 'shutdown' and still gates it (regression guard: "
+        "the inner gate must re-check the CORRECTED action, not just trust "
+        "whatever Gemini originally sent)",
         "[CONFIRMATION_REQUIRED]" in _fuzzy_result,
     )
 except Exception as e:

@@ -54,7 +54,11 @@ class SpeechToText:
             # on already-trimmed speech. Measured 30-90ms saved per short
             # utterance by skipping it, with no accuracy difference on
             # phrases where both settings produced the same transcript.
-            audio_f32, language=language, beam_size=1, vad_filter=False,
+            audio_f32,
+            language=language,
+            beam_size=3,
+            condition_on_previous_text=False,
+            vad_filter=False,
         )
         return " ".join(seg.text.strip() for seg in segments).strip()
 

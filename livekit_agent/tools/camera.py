@@ -62,16 +62,23 @@ async def _ask_about_image(image_path, question: str) -> str:
         f"{question}" if question else
         "Кратко опиши, что видно на этом кадре с веб-камеры."
     )
+    system = (
+        "Ты — зрение голосового ассистента Jarvis, смотрящего через веб-камеру "
+        "пользователя. Отвечай по-русски, естественно и коротко (1-3 предложения) "
+        "— ответ будет озвучен вслух, а не прочитан. Опиши только то, что реально "
+        "видно на кадре; если кадр тёмный, размытый или пустой, так и скажи."
+    )
+    if config.SUBSCRIPTION_MODE:
+        import cc_agent
+
+        text = await cc_agent.ask(prompt, system=system, images=[cc_agent.image_block(image_bytes)],
+                                  model=config.CLAUDE_CODE_AGENT_MODEL)
+        return text.strip() or "Не удалось разобрать, что на кадре."
     client = anthropic.AsyncAnthropic(api_key=config.ANTHROPIC_API_KEY)
     msg = await client.messages.create(
         model=config.CAMERA_MODEL,
         max_tokens=400,
-        system=(
-            "Ты — зрение голосового ассистента Jarvis, смотрящего через веб-камеру "
-            "пользователя. Отвечай по-русски, естественно и коротко (1-3 предложения) "
-            "— ответ будет озвучен вслух, а не прочитан. Опиши только то, что реально "
-            "видно на кадре; если кадр тёмный, размытый или пустой, так и скажи."
-        ),
+        system=system,
         messages=[{
             "role": "user",
             "content": [

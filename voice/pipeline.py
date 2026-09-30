@@ -25,10 +25,10 @@ from dataclasses import dataclass
 
 import numpy as np
 
-from voice.wake_word import WakeWordDetector, WakeWordConfig, FRAME_SIZE, SAMPLE_RATE
-from voice.vad import EndOfSpeechDetector, SilenceConfig
+from voice.wake_word import FRAME_SIZE, SAMPLE_RATE
+from voice.vad import EndOfSpeechDetector, SilenceConfig, SpeechOnsetDetector
 from voice.stt import SpeechToText, pcm16_to_float32
-from voice.tts import MmsTtsProvider
+from voice.tts import PiperTtsProvider
 from voice.fast_router import route, RouteResult
 from core import latency
 
@@ -59,17 +59,24 @@ class VoicePipeline:
     """
 
     def __init__(self):
-        self.wake_word = WakeWordDetector(WakeWordConfig())
+        # Wake-word detection: speech onset (this VAD-backed detector) +
+        # a transcription check for "джарвис" in core/fast_path.py, NOT
+        # openWakeWord's pretrained "hey_jarvis" classifier (voice/wake_word
+        # .py) -- that model can't recognize Russian pronunciation at all
+        # (measured near-zero confidence). voice/wake_word.py is kept
+        # around, just unused by default; swap back if a custom-trained
+        # Russian openWakeWord model ever becomes available.
+        self.speech_onset = SpeechOnsetDetector()
         self.vad = EndOfSpeechDetector(SilenceConfig())
         self.stt = SpeechToText()
-        self.tts = MmsTtsProvider()
+        self.tts = PiperTtsProvider()
         self._prewarmed = False
 
     def prewarm(self) -> None:
         if self._prewarmed:
             return
         t0 = time.monotonic()
-        self.wake_word.load()
+        self.speech_onset.load()
         self.vad.load()
         self.stt.load()
         self.tts.load()

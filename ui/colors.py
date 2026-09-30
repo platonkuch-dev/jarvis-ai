@@ -12,15 +12,15 @@ from PyQt6.QtGui import QColor
 class C:
     """Minimal Glass palette — one soft accent, calm neutrals, semantic
     warning/critical colors kept separate from the accent hue."""
-    BG        = "#080b10"
-    PANEL     = "#0d1218"
-    PANEL2    = "#10161d"
-    BORDER    = "#1c232c"
-    BORDER_B  = "#2a3540"
-    BORDER_A  = "#212a33"
-    PRI       = "#7fe3ff"
-    PRI_DIM   = "#4a8fa3"
-    PRI_GHO   = "#132630"
+    BG        = "#0b1016"
+    PANEL     = "#111820"
+    PANEL2    = "#18212b"
+    BORDER    = "#25313d"
+    BORDER_B  = "#334454"
+    BORDER_A  = "#2b3946"
+    PRI       = "#84dfff"
+    PRI_DIM   = "#5ba4bf"
+    PRI_GHO   = "#163541"
     ACC       = "#ff9d6b"     # warning
     ACC2      = "#cfe3ea"     # neutral highlight (was amber)
     GREEN     = "#9fe8c9"

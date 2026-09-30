@@ -8,6 +8,7 @@ anthropic==0.125.0
 anyio==4.15.1
 attrs==26.1.0
 av==18.1.0
+bleak==3.0.2
 certifi==2026.7.22
 cffi==2.1.1
 charset-normalizer==3.5.1
@@ -32,7 +33,6 @@ idna==3.19
 jiter==0.17.0
 json_repair==0.60.1
 keyboard==0.13.5
-livekit==1.1.18
 livekit-agents==1.8.1
 livekit-api==1.2.1
 livekit-blingfire==1.1.0
@@ -44,6 +44,7 @@ livekit-plugins-elevenlabs==1.8.1
 livekit-plugins-openai==1.8.1
 livekit-plugins-silero==1.8.1
 livekit-protocol==1.1.26
+livekit==1.1.18
 lxml==6.1.3
 markdown-it-py==4.2.0
 mdurl==0.1.2
@@ -54,10 +55,10 @@ numpy==2.5.3
 onnxruntime==1.30.0
 openai==2.54.0
 opentelemetry-api==1.44.0
-opentelemetry-exporter-otlp==1.44.0
 opentelemetry-exporter-otlp-proto-common==1.44.0
 opentelemetry-exporter-otlp-proto-grpc==1.44.0
 opentelemetry-exporter-otlp-proto-http==1.44.0
+opentelemetry-exporter-otlp==1.44.0
 opentelemetry-proto==1.44.0
 opentelemetry-sdk==1.44.0
 opentelemetry-semantic-conventions==0.65b0
@@ -81,8 +82,8 @@ PyJWT==2.14.0
 PyMsgBox==2.0.1
 pyperclip==1.11.0
 pypiwin32==223
-PyQt6==6.11.0
 PyQt6-Qt6==6.11.2
+PyQt6==6.11.0
 PyQt6_sip==13.12.0
 PyRect==0.2.0
 PyScreeze==1.0.1
@@ -114,5 +115,14 @@ urllib3==2.7.0
 uvicorn==0.52.4
 watchfiles==1.2.0
 websockets==15.0.1
+winrt-runtime==3.2.1
+winrt-Windows.Devices.Bluetooth.Advertisement==3.2.1
+winrt-Windows.Devices.Bluetooth.GenericAttributeProfile==3.2.1
+winrt-Windows.Devices.Bluetooth==3.2.1
+winrt-Windows.Devices.Enumeration==3.2.1
+winrt-Windows.Devices.Radios==3.2.1
+winrt-Windows.Foundation.Collections==3.2.1
+winrt-Windows.Foundation==3.2.1
+winrt-Windows.Storage.Streams==3.2.1
 WMI==1.5.1
 yarl==1.24.5

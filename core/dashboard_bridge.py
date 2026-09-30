@@ -44,12 +44,25 @@ async def process_dashboard_commands(self) -> None:
             )
             if not text:
                 continue
+            # main.py's run() only connects once woken (see
+            # _require_wake_word) -- a dashboard command arriving while
+            # idle IS a wake trigger, same as voice/typed/Telegram input,
+            # so it actually has a session to wait for below instead of
+            # just hoping one appears. If this consumed `text` as the new
+            # session's opener, run() sends it once connected -- don't
+            # send it again below.
+            sent_as_opener = self._trigger_wake(text)
             # Wait up to 8s for session to become ready after a wake
             for _ in range(80):
                 if self.session:
                     break
                 await asyncio.sleep(0.1)
-            if self.session:
+            if sent_as_opener:
+                if self.session:
+                    self.ui.write_log(f"[Web]: {text}")
+                else:
+                    print(f"[Dashboard] Wake never connected: {text}")
+            elif self.session:
                 await self.session.send_client_content(
                     turns={"parts": [{"text": text}]},
                     turn_complete=True,

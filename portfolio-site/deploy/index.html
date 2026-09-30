@@ -1,0 +1,317 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+<meta charset="UTF-8">
+<meta name="viewport" content="width=device-width, initial-scale=1">
+<title>JARVIS AI — Voice AI Assistant Developer | Portfolio</title>
+<meta name="description" content="I build real-time voice AI assistants that hear, see and control your computer. Portfolio case study: JARVIS AI — a desktop assistant.">
+<meta name="theme-color" content="#05070d">
+<meta name="robots" content="index, follow">
+<meta property="og:type" content="website">
+<meta property="og:title" content="JARVIS AI — Voice AI Assistant Developer">
+<meta property="og:description" content="I build real-time voice AI assistants that hear, see and control your computer. Case study, live demo and architecture.">
+<meta name="twitter:card" content="summary">
+<link rel="icon" href="data:image/svg+xml,%3Csvg xmlns='http://www.w3.org/2000/svg' viewBox='0 0 32 32'%3E%3Ccircle cx='16' cy='16' r='13' fill='none' stroke='%2322d3ee' stroke-width='2.5'/%3E%3Ccircle cx='16' cy='16' r='5' fill='%236366f1'/%3E%3C/svg%3E">
+<link rel="preconnect" href="https://fonts.googleapis.com">
+<link rel="preconnect" href="https://fonts.gstatic.com" crossorigin>
+<link href="https://fonts.googleapis.com/css2?family=IBM+Plex+Mono:wght@400;500&family=Manrope:wght@300;400;600;700;800&family=Sora:wght@300;400;600;700;800&display=swap" rel="stylesheet">
+<link rel="stylesheet" href="style.css">
+</head>
+<body>
+
+<canvas id="bg" aria-hidden="true"></canvas>
+<div class="grain" aria-hidden="true"></div>
+<div class="cursor" id="cursor" aria-hidden="true"></div>
+<div class="progress" id="progress" aria-hidden="true"></div>
+
+<!-- ================= NAV ================= -->
+<header class="nav" id="nav">
+  <a class="logo" href="#top" aria-label="Home">
+    <span class="logo-mark"></span>
+    <span class="logo-text">JARVIS <b>AI</b></span>
+    <span class="logo-by">PLATON_IND</span>
+  </a>
+  <nav class="nav-links" id="navLinks">
+    <a href="#work" data-i18n="nav.work">Case study</a>
+    <a href="#capabilities" data-i18n="nav.cap">Capabilities</a>
+    <a href="#demo" data-i18n="nav.demo">Live demo</a>
+    <a href="#architecture" data-i18n="nav.arch">Architecture</a>
+    <a href="#downloads" id="navDl" data-i18n="nav.dl" hidden>Downloads</a>
+    <a href="#faq">FAQ</a>
+  </nav>
+  <div class="lang" id="lang" role="group" aria-label="Language">
+    <button type="button" data-lang="en" aria-pressed="true">EN</button>
+    <button type="button" data-lang="ru" aria-pressed="false">RU</button>
+  </div>
+  <a class="btn btn-sm magnetic" href="#contact" data-fiverr data-i18n="nav.cta">Hire me on Fiverr</a>
+  <button class="burger" id="burger" aria-label="Menu" aria-expanded="false"><span></span><span></span></button>
+</header>
+
+<main id="top">
+
+<!-- ================= HERO ================= -->
+<section class="hero" id="hero">
+  <div class="wrap hero-grid">
+    <div class="hero-copy">
+      <p class="eyebrow reveal"><span class="pulse"></span><span data-i18n="hero.eyebrow">Available for new projects</span></p>
+      <h1 class="reveal" data-delay="1">
+        <span data-i18n="hero.h1">I build AI assistants that </span><span class="swap" id="swap"><span class="swap-ghost" aria-hidden="true">hear.</span><span class="grad swap-live" id="scramble" data-words="hear|see|remember|control your PC|act on their own" data-words-ru="слышат|видят|помнят|управляют вашим ПК|действуют сами">hear.</span></span>
+      </h1>
+      <p class="lead reveal" data-delay="2" data-i18n="hero.lead">
+        Real-time voice, screen vision, desktop automation and persistent memory —
+        packaged into one JARVIS-style assistant that runs on <strong>your</strong> machine.
+        Below is the full case study of the system I built.
+      </p>
+      <div class="cta-row reveal" data-delay="3">
+        <a class="btn magnetic" href="#contact" data-fiverr><span data-i18n="hero.cta1">Start a project</span> <svg viewBox="0 0 24 24" width="18" height="18"><path d="M5 12h14M13 6l6 6-6 6" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"/></svg></a>
+        <a class="btn btn-ghost magnetic" href="#demo" data-i18n="hero.cta2">Watch it work</a>
+      </div>
+      <ul class="hero-stats reveal" data-delay="4">
+        <li><b data-count="25" data-suffix="+">0</b><span data-i18n="hero.s1">voice-callable tools</span></li>
+        <li><b data-count="100" data-prefix="&lt;" data-suffix="ms">0</b><span data-i18n="hero.s2">interrupt latency</span></li>
+        <li><b data-count="3">0</b><span data-i18n="hero.s3">operating systems</span></li>
+        <li><b data-count="4">0</b><span data-i18n="hero.s4">control fallback layers</span></li>
+      </ul>
+    </div>
+    <div class="hero-hud reveal" data-delay="2" aria-hidden="true">
+      <div class="hud-tag t1"><i></i><span data-i18n="hud.1">LISTENING</span></div>
+      <div class="hud-tag t2"><i></i><span data-i18n="hud.2">VISION ONLINE</span></div>
+      <div class="hud-tag t3"><i></i><span data-i18n="hud.3">MEMORY SYNCED</span></div>
+    </div>
+  </div>
+  <a href="#work" class="scroll-hint" aria-label="Scroll down"><span></span></a>
+</section>
+
+<!-- ================= MARQUEE ================= -->
+<section class="marquee" aria-label="Technology stack">
+  <div class="marquee-track">
+    <span>Python</span><span>Gemini Live API</span><span>Claude</span><span>PyQt6</span><span>Playwright</span><span>FastAPI</span><span>Rust</span><span>TypeScript</span><span>Telegram</span><span>LiveKit</span><span>Ollama</span><span>Whisper</span><span>Win32 / UIA</span>
+    <span>Python</span><span>Gemini Live API</span><span>Claude</span><span>PyQt6</span><span>Playwright</span><span>FastAPI</span><span>Rust</span><span>TypeScript</span><span>Telegram</span><span>LiveKit</span><span>Ollama</span><span>Whisper</span><span>Win32 / UIA</span>
+  </div>
+</section>
+
+<!-- ================= CASE STUDY ================= -->
+<section class="section" id="work">
+  <div class="wrap">
+    <p class="kicker reveal" data-i18n="case.kicker">Case study</p>
+    <h2 class="reveal" data-delay="1" data-i18n="case.title">JARVIS AI<br><span class="dim">a desktop assistant that behaves like software from a movie.</span></h2>
+
+    <div class="case-grid">
+      <div class="case-text reveal">
+        <p data-i18n="case.p1">
+          A real-time voice AI that <strong>hears, sees, understands and controls a computer</strong>. It streams
+          native audio over the Gemini Live API, sees the screen and webcam, remembers your projects and preferences
+          between sessions, and operates apps the way a person would — with hands, not just APIs.
+        </p>
+        <p data-i18n="case.p2">
+          The brief was to remove every point of friction: silence while it thinks, double responses, slow interrupts,
+          search results that link to homepages. The result feels like talking to a colleague, not a chatbot.
+        </p>
+        <ul class="ticks">
+          <li data-i18n="case.t1">Hybrid voice + keyboard input with a live HUD (waveform, log, camera feed)</li>
+          <li data-i18n="case.t2">Local <em>Fast Path</em> — simple commands still work when the cloud is down</li>
+          <li data-i18n="case.t3">Offline chat fallback through a local Ollama model</li>
+          <li data-i18n="case.t4">Per-capability privacy switches enforced <em>before</em> a tool runs</li>
+        </ul>
+      </div>
+
+      <div class="case-cards">
+        <article class="tilt reveal" data-delay="1">
+          <h3 data-i18n="case.c1h">Instant interrupt</h3>
+          <p data-i18n="case.c1p">Audio is streamed in ~50&nbsp;ms slices, so pressing <kbd>Esc</kbd> cuts the assistant off mid-word and returns to listening in under 100&nbsp;ms.</p>
+        </article>
+        <article class="tilt reveal" data-delay="2">
+          <h3 data-i18n="case.c2h">Parallel news search</h3>
+          <p data-i18n="case.c2p">An LLM-grounded search and a news search race in parallel threads. First valid answer wins — real article links, never homepages.</p>
+        </article>
+        <article class="tilt reveal" data-delay="3">
+          <h3 data-i18n="case.c3h">Self-healing sessions</h3>
+          <p data-i18n="case.c3p">Exponential back-off reconnects (3 → 6 → 12 → 60&nbsp;s) with clear status, and full state reset on every new session.</p>
+        </article>
+      </div>
+    </div>
+  </div>
+</section>
+
+<!-- ================= CAPABILITIES ================= -->
+<section class="section" id="capabilities">
+  <div class="wrap">
+    <p class="kicker reveal" data-i18n="cap.kicker">Capabilities</p>
+    <h2 class="reveal" data-delay="1" data-i18n="cap.title">Everything a personal AI should do,<br><span class="dim">in one voice-driven core.</span></h2>
+
+    <div class="cap-grid">
+      <article class="cap tilt reveal">
+        <div class="ico"><svg viewBox="0 0 24 24"><path d="M12 3a3 3 0 0 0-3 3v6a3 3 0 0 0 6 0V6a3 3 0 0 0-3-3zM5 11a7 7 0 0 0 14 0M12 18v3"/></svg></div>
+        <h3 data-i18n="cap.1h">Real-time voice</h3>
+        <p data-i18n="cap.1p">Ultra-low-latency conversation in any language, with automatic language detection and correct forms of address.</p>
+      </article>
+      <article class="cap tilt reveal" data-delay="1">
+        <div class="ico"><svg viewBox="0 0 24 24"><rect x="3" y="4" width="18" height="13" rx="2"/><path d="M8 21h8M12 17v4"/></svg></div>
+        <h3 data-i18n="cap.2h">System control</h3>
+        <p data-i18n="cap.2p">Launch apps, manage windows, volume, brightness, Wi-Fi, shortcuts and power — by voice.</p>
+      </article>
+      <article class="cap tilt reveal" data-delay="2">
+        <div class="ico"><svg viewBox="0 0 24 24"><path d="M2 12s4-7 10-7 10 7 10 7-4 7-10 7S2 12 2 12z"/><circle cx="12" cy="12" r="3"/></svg></div>
+        <h3 data-i18n="cap.3h">Visual awareness</h3>
+        <p data-i18n="cap.3p">Screen capture and webcam piped into the live session. “What’s on my screen?” just works.</p>
+      </article>
+      <article class="cap tilt reveal">
+        <div class="ico"><svg viewBox="0 0 24 24"><path d="M12 3a7 7 0 0 0-4 12.7V18h8v-2.3A7 7 0 0 0 12 3zM9 21h6"/></svg></div>
+        <h3 data-i18n="cap.4h">Persistent memory</h3>
+        <p data-i18n="cap.4p">Remembers projects, preferences and personal context across sessions and adapts its briefings.</p>
+      </article>
+      <article class="cap tilt reveal" data-delay="1">
+        <div class="ico"><svg viewBox="0 0 24 24"><circle cx="11" cy="11" r="7"/><path d="M21 21l-4.3-4.3"/></svg></div>
+        <h3 data-i18n="cap.5h">Multi-mode web search</h3>
+        <p data-i18n="cap.5p">News, research, price, compare — grounded answers with sources, with DuckDuckGo as a safety net.</p>
+      </article>
+      <article class="cap tilt reveal" data-delay="2">
+        <div class="ico"><svg viewBox="0 0 24 24"><path d="M12 2l3 7 7 .6-5.3 4.7 1.7 7L12 17.5 5.6 21.3l1.7-7L2 9.6 9 9z"/></svg></div>
+        <h3 data-i18n="cap.6h">Autonomous tasks</h3>
+        <p data-i18n="cap.6p">Give it a multi-step goal — it plans, acts, checks the result and corrects itself.</p>
+      </article>
+      <article class="cap tilt reveal">
+        <div class="ico"><svg viewBox="0 0 24 24"><path d="M22 2L11 13M22 2l-7 20-4-9-9-4z"/></svg></div>
+        <h3 data-i18n="cap.7h">Telegram &amp; messaging</h3>
+        <p data-i18n="cap.7p">Compose and send messages, talk to the assistant remotely, and get alerts on your phone.</p>
+      </article>
+      <article class="cap tilt reveal" data-delay="1">
+        <div class="ico"><svg viewBox="0 0 24 24"><path d="M3 12h4l3-8 4 16 3-8h4"/></svg></div>
+        <h3 data-i18n="cap.8h">Hardware telemetry</h3>
+        <p data-i18n="cap.8p">Live CPU, RAM, GPU and temperature monitoring with spoken alerts when thresholds are crossed.</p>
+      </article>
+      <article class="cap tilt reveal" data-delay="2">
+        <div class="ico"><svg viewBox="0 0 24 24"><circle cx="12" cy="12" r="9"/><path d="M12 7v5l3 2"/></svg></div>
+        <h3 data-i18n="cap.9h">Reminders &amp; routines</h3>
+        <p data-i18n="cap.9p">OS-native scheduled notifications and named command routines you can run or schedule daily.</p>
+      </article>
+    </div>
+  </div>
+</section>
+
+<!-- ================= LIVE DEMO ================= -->
+<section class="section" id="demo">
+  <div class="wrap demo-wrap">
+    <div class="demo-copy">
+      <p class="kicker reveal" data-i18n="demo.kicker">Live demo</p>
+      <h2 class="reveal" data-delay="1" data-i18n="demo.title">Talk to it.<br><span class="dim">Watch it work.</span></h2>
+      <p class="lead reveal" data-delay="2" data-i18n="demo.lead">A simulated session showing how a request flows from voice to tool call to result. Pick a scenario.</p>
+      <div class="chips reveal" data-delay="3" id="scenarioChips" role="tablist">
+        <button class="chip active" data-scenario="0" role="tab" data-i18n="demo.c0">Open &amp; type</button>
+        <button class="chip" data-scenario="1" role="tab" data-i18n="demo.c1">Screen vision</button>
+        <button class="chip" data-scenario="2" role="tab" data-i18n="demo.c2">News briefing</button>
+        <button class="chip" data-scenario="3" role="tab" data-i18n="demo.c3">PC diagnostics</button>
+      </div>
+    </div>
+
+    <div class="terminal-stage reveal" data-delay="2">
+      <div class="terminal" id="terminal">
+        <div class="term-bar">
+          <span class="dot r"></span><span class="dot y"></span><span class="dot g"></span>
+          <span class="term-title" data-i18n="demo.term">jarvis — simulated session</span>
+          <span class="term-state" id="termState"><i></i>IDLE</span>
+        </div>
+        <div class="wave" id="wave" aria-hidden="true"></div>
+        <div class="term-body" id="termBody" aria-live="polite"></div>
+      </div>
+    </div>
+  </div>
+</section>
+
+<!-- ================= ARCHITECTURE ================= -->
+<section class="section" id="architecture">
+  <div class="wrap">
+    <p class="kicker reveal" data-i18n="arch.kicker">Architecture</p>
+    <h2 class="reveal" data-delay="1" data-i18n="arch.title">A four-layer control ladder.<br><span class="dim">It never gives up on the first try.</span></h2>
+    <p class="lead reveal" data-delay="2" style="max-width:640px" data-i18n="arch.lead">
+      When one method can’t reach a control, the assistant falls back to the next. Every action is logged with app, window, target, method, result and timing.
+    </p>
+
+    <div class="stack-stage" id="stackStage">
+      <div class="stack" id="stack">
+        <div class="layer l4"><span class="n">04</span><div><h3 data-i18n="arch.l4h">Vision</h3><p data-i18n="arch.l4p">Screenshot + multimodal model finds the element visually</p></div><em data-i18n="arch.l4e">last resort</em></div>
+        <div class="layer l3"><span class="n">03</span><div><h3 data-i18n="arch.l3h">Keyboard &amp; mouse</h3><p data-i18n="arch.l3p">Synthesised input when UI Automation can’t reach a control</p></div><em data-i18n="arch.l3e">fallback</em></div>
+        <div class="layer l2"><span class="n">02</span><div><h3>UI Automation</h3><p data-i18n="arch.l2p">Find, click, type, read and select controls by name, id or class</p></div><em data-i18n="arch.l2e">precise</em></div>
+        <div class="layer l1"><span class="n">01</span><div><h3>Native Win32</h3><p data-i18n="arch.l1p">Process and window enumeration, focus, move, resize, close</p></div><em data-i18n="arch.l1e">fastest</em></div>
+      </div>
+    </div>
+
+    <div class="flow reveal">
+      <div class="node" data-i18n="flow.1">Voice / text</div><i></i>
+      <div class="node" data-i18n="flow.2">LLM reasoning</div><i></i>
+      <div class="node" data-i18n="flow.3">Tool router + privacy gate</div><i></i>
+      <div class="node hot" data-i18n="flow.4">Action</div><i></i>
+      <div class="node" data-i18n="flow.5">Spoken result</div>
+    </div>
+  </div>
+</section>
+
+<!-- ================= DOWNLOADS ================= -->
+<section class="section" id="downloads" hidden>
+  <div class="wrap">
+    <p class="kicker reveal" data-i18n="dl.kicker">Downloads</p>
+    <h2 class="reveal" data-delay="1" data-i18n="dl.title">Try it yourself.<br><span class="dim">Download the assistant.</span></h2>
+    <p class="lead reveal" data-delay="2" data-i18n="dl.lead">Grab the Windows installer. You’ll need your own API keys — see the FAQ.</p>
+    <div class="dl-grid" id="dlGrid"></div>
+    <div class="dl-warn reveal">
+      <svg viewBox="0 0 24 24"><path d="M12 9v4M12 17h.01M10.3 3.9 1.8 18a2 2 0 0 0 1.7 3h17a2 2 0 0 0 1.7-3L13.7 3.9a2 2 0 0 0-3.4 0Z"/></svg>
+      <p data-i18n="dl.warn">Windows may show a <strong>SmartScreen</strong> warning on first launch because the installer isn't code-signed yet — this is standard for new, independently-built apps, not a sign the file is unsafe. Click <strong>"More info" → "Run anyway"</strong> to continue. Download only from this page.</p>
+    </div>
+    <p class="dl-note reveal" data-i18n="dl.note">Windows 10/11 · Download only from this page and check the file size before running.</p>
+  </div>
+</section>
+
+<!-- ================= PROCESS ================= -->
+<section class="section" id="process">
+  <div class="wrap">
+    <p class="kicker reveal" data-i18n="proc.kicker">Process</p>
+    <h2 class="reveal" data-delay="1" data-i18n="proc.title">From idea to a working assistant.</h2>
+    <ol class="steps">
+      <li class="reveal"><span>01</span><h3 data-i18n="proc.1h">Brief</h3><p data-i18n="proc.1p">You describe the workflow and the tools it must control. I reply with scope, timeline and a plan.</p></li>
+      <li class="reveal" data-delay="1"><span>02</span><h3 data-i18n="proc.2h">Build</h3><p data-i18n="proc.2p">Core loop first, then tools one by one — each verified against real apps, not mocks.</p></li>
+      <li class="reveal" data-delay="2"><span>03</span><h3 data-i18n="proc.3h">Harden</h3><p data-i18n="proc.3p">Privacy gates, confirmations for risky actions, reconnects, logging and auto-start.</p></li>
+      <li class="reveal" data-delay="3"><span>04</span><h3 data-i18n="proc.4h">Deliver</h3><p data-i18n="proc.4p">Installer, documentation and a walkthrough call so it’s yours to run and extend.</p></li>
+    </ol>
+  </div>
+</section>
+
+<!-- ================= FAQ ================= -->
+<section class="section" id="faq">
+  <div class="wrap narrow">
+    <p class="kicker reveal" data-i18n="faq.kicker">FAQ</p>
+    <h2 class="reveal" data-delay="1" data-i18n="faq.title">Questions, answered.</h2>
+    <div class="faq">
+      <details class="reveal"><summary data-i18n="faq.1q">Does it run locally or in the cloud?</summary><p data-i18n="faq.1a">The assistant runs on your computer. Voice reasoning uses a cloud model API by default, and an offline fast path plus an optional local LLM (Ollama) cover basic commands without internet.</p></details>
+      <details class="reveal"><summary data-i18n="faq.2q">Which operating systems are supported?</summary><p data-i18n="faq.2a">Windows, macOS and Linux for the core assistant. The deepest desktop-control layer (Win32 + UI Automation) is Windows-first.</p></details>
+      <details class="reveal"><summary data-i18n="faq.3q">Is it safe to let an AI control my PC?</summary><p data-i18n="faq.3a">Capabilities such as camera, screen, files, browser and messaging have individual privacy switches that are enforced before a tool runs, and destructive actions can require explicit confirmation.</p></details>
+      <details class="reveal"><summary data-i18n="faq.4q">Can you connect it to my own tools or APIs?</summary><p data-i18n="faq.4a">Yes — new tools are registered with a schema and routed through the same permission layer, so custom integrations are a natural extension.</p></details>
+      <details class="reveal"><summary data-i18n="faq.5q">What do I need to provide?</summary><p data-i18n="faq.5a">Your use-case, the apps you want it to control, and your own API keys. Keys stay in a local config on your machine.</p></details>
+      <details class="reveal"><summary data-i18n="faq.6q">Why does Windows warn me when I install it?</summary><p data-i18n="faq.6a">The installer isn't code-signed yet, so Windows SmartScreen shows a caution screen the first time — this is standard for new, independently-built apps and not a sign of a virus. Choose "More info" → "Run anyway". Only download it from this page.</p></details>
+    </div>
+  </div>
+</section>
+
+<!-- ================= CTA ================= -->
+<section class="cta" id="contact">
+  <div class="wrap">
+    <h2 class="reveal" data-i18n="cta.title">Ready to build your own JARVIS?</h2>
+    <p class="lead reveal" data-delay="1" data-i18n="cta.lead">Tell me what you want it to do. I’ll reply within 24 hours with a plan.</p>
+    <div class="cta-row center reveal" data-delay="2">
+      <a class="btn btn-lg magnetic" href="https://www.fiverr.com/" data-fiverr target="_blank" rel="noopener" data-i18n="cta.b1">Order on Fiverr</a>
+      <a class="btn btn-ghost btn-lg magnetic" href="mailto:you@example.com" data-mail data-i18n="cta.b2">Send an email</a>
+    </div>
+  </div>
+</section>
+</main>
+
+<footer class="footer">
+  <div class="wrap foot-row">
+    <span id="footCopy">© <span id="year"></span> Platon_ind. All rights reserved.</span>
+    <span class="foot-credit" data-i18n="foot.credit">JARVIS AI — case study by Platon_ind.</span>
+  </div>
+</footer>
+
+<noscript><style>.reveal{opacity:1!important;transform:none!important}</style></noscript>
+<script src="app.js" defer></script>
+</body>
+</html>

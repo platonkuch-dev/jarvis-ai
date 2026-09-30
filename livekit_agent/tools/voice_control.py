@@ -72,3 +72,29 @@ async def change_voice(context: RunContext, voice_name: str) -> str:
     """
     result = await _change_voice(voice_name=voice_name)
     return result["message"]
+
+
+@register_impl("set_microphone")
+@log_call("set_microphone")
+async def _set_microphone(*, on: bool) -> dict:
+    import mic_control
+
+    mic_control.set_muted(not on)
+    if on:
+        return {"status": "ok", "message": "Включаю микрофон."}
+    return {"status": "ok", "message": "Выключаю микрофон. Включить — F9 или кнопкой на панели.",
+            "speech": "Выключаю микрофон."}
+
+
+@register_tool
+@function_tool
+async def set_microphone(context: RunContext, on: bool) -> str:
+    """Turn Jarvis's microphone off or on ("выключи микрофон", "не слушай меня";
+    from Telegram also "включи микрофон"). While it's off he hears nothing, not
+    even "Hey Jarvis" -- it comes back with F9 or the panel's mic button.
+
+    Args:
+        on: False to mute, True to unmute.
+    """
+    result = await _set_microphone(on=on)
+    return result["message"]

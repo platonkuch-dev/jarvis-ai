@@ -22,3 +22,9 @@ native-core/target/
 
 # --- editor/local tooling ---
 .claude/
+
+# --- personal data / heavy binaries: never commit ---
+memory/long_term.json
+voice/piper_bin/
+portfolio-site/files-to-upload/
+*.zip

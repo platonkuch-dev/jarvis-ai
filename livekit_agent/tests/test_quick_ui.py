@@ -20,7 +20,8 @@ def fakes(tmp_path, monkeypatch):
         calls["uia"].append((app, action, target))
         return outcome["ok"], "Clicked." if outcome["ok"] else "not found"
 
-    async def fake_screen(*, task, max_steps=None):
+    async def fake_screen(*, task, max_steps=None, simple=False):
+        assert simple, "quick_ui's fallback is a one-step task: it should use the fast tier"
         calls["screen"].append(task)
         return {"status": "ok", "message": "Сделал глазами."}
 
@@ -72,6 +73,22 @@ async def test_app_demoted_after_repeated_failures(fakes):
     await quick_ui._quick_ui(app="OldApp", action="click", target="OK")
     assert len(calls["uia"]) == quick_ui._MAX_FAILS  # skipped UIA this time
     assert "часто ошибался" in quick_ui.route("oldapp.exe", "click", "OK")
+
+
+async def test_hotkey_needs_no_uia_and_no_screen_agent(fakes, monkeypatch):
+    calls, _ = fakes
+    pressed = []
+
+    async def fake_hotkey(app, keys):
+        pressed.append((app, keys))
+        return {"status": "ok", "message": "Готово.", "method": "hotkey"}
+
+    monkeypatch.setattr(quick_ui, "_hotkey", fake_hotkey)
+    r = await quick_ui._quick_ui(app="Блокнот", action="hotkey", target="", text="ctrl+a")
+    assert r["method"] == "hotkey" and pressed == [("Блокнот", "ctrl+a")]
+    assert calls["uia"] == [] and calls["screen"] == []
+    r = await quick_ui._quick_ui(app="Блокнот", action="hotkey", target="")
+    assert r["status"] == "error"
 
 
 def test_policy_for_background_tasks():

@@ -178,7 +178,9 @@ def _fresh_env() -> dict[str, str | None]:
 
 def _core_configured() -> bool:
     env = _fresh_env()
-    return bool(env.get("ANTHROPIC_API_KEY") and env.get("DEEPGRAM_API_KEY"))
+    # LLM_PROVIDER=claude_code talks through the logged-in `claude` CLI, no API key.
+    has_brain = env.get("ANTHROPIC_API_KEY") or env.get("LLM_PROVIDER") == "claude_code"
+    return bool(has_brain and env.get("DEEPGRAM_API_KEY"))
 
 
 def _livekit_configured() -> bool:

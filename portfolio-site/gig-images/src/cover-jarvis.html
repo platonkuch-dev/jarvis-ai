@@ -1,0 +1,20 @@
+<!doctype html><meta charset="utf-8"><link rel="stylesheet" href="base.css">
+<style>
+.orb{position:absolute;right:120px;top:50%;width:470px;height:470px;margin-top:-235px}
+.orb i{position:absolute;inset:0;border-radius:50%;border:2px solid rgba(34,211,238,.55)}
+.orb i:nth-child(2){inset:-46px;border-color:rgba(99,102,241,.5);transform:rotate(62deg) scaleY(.42)}
+.orb i:nth-child(3){inset:-90px;border-color:rgba(167,139,250,.4);transform:rotate(-38deg) scaleY(.5)}
+.orb i:nth-child(4){inset:34px;border-color:rgba(34,211,238,.25)}
+.orb .core{position:absolute;inset:78px;border-radius:50%;background:radial-gradient(circle at 38% 32%,#b6f6ff,#22d3ee 28%,#4f46e5 72%,#1e1b4b);box-shadow:0 0 120px 30px rgba(34,211,238,.45),inset 0 0 60px rgba(255,255,255,.35)}
+.wave{position:absolute;left:0;right:0;top:50%;display:flex;align-items:center;justify-content:center;gap:7px;height:0}
+.wave s{display:block;width:9px;border-radius:5px;background:linear-gradient(#fff,#a5f3fc);opacity:.95}
+</style>
+<div class="bg"></div><div class="grid"></div>
+<div class="copy"><div class="tag">Custom AI assistant</div><h1>Your own <span>JARVIS AI</span></h1>
+<p class="sub">Voice assistant that hears, sees and controls your PC</p>
+<div class="chips"><b>Voice</b><b>Vision</b><b>PC control</b><b>Memory</b></div></div>
+<div class="orb"><i></i><i></i><i></i><i></i><div class="core"></div>
+<div class="wave" id="w"></div></div>
+<script>const h=[18,34,52,78,104,132,104,150,112,84,120,78,52,34,18];const w=document.getElementById('w');
+h.forEach(v=>{const s=document.createElement('s');s.style.height=v*0.9+'px';s.style.marginTop=(-v*0.45)+'px';w.appendChild(s)});
+w.style.height='0';</script>

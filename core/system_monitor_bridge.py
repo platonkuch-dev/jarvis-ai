@@ -14,12 +14,13 @@ from __future__ import annotations
 import asyncio
 
 from memory.memory_manager import load_memory
+from core.assistant_state import get_state
 
 
 async def run_system_monitor(self) -> None:
     """Background task: voice alerts when metrics exceed thresholds."""
     while True:
-        await asyncio.sleep(10)
+        await asyncio.sleep(5 if get_state()["power_mode"]["enabled"] else 10)
         alert = await asyncio.to_thread(self._sys_monitor.check)
         if alert and self.session:
             try:
@@ -35,11 +36,28 @@ async def run_proactive_mode(self) -> None:
     Background task: periodically checks if the user has been silent long enough,
     then hands time + memory context to Gemini so it can decide what (if anything)
     to say proactively. No hardcoded rules — Gemini makes the call.
+
+    DISABLED as of the wake-word-gated session model (main.py's
+    _require_wake_word, core/idle_watchdog.py): this only ever fires while
+    self.session is set, but the idle watchdog now closes the session
+    after ~150s of silence (core/idle_watchdog.py's IDLE_CLOSE_SECS) --
+    far short of ProactiveEngine's 900s threshold (actions/proactive.py),
+    which can now structurally never be reached. Left in place rather than
+    deleted for a future rework that re-scopes the trigger to fire across
+    sessions (track wall-clock time since the session last closed, and
+    have this task open a session itself once idle long enough) --
+    explicitly out of scope for now; the user chose to disable rather than
+    rebuild this. Kept as a real early-return (not just dead code) so this
+    task isn't spending a wakeup a minute for nothing on top of it.
     """
+    return
     while True:
         await asyncio.sleep(60)   # evaluate once per minute
 
         if not self.session:
+            continue
+
+        if get_state()["focus"]["active"]:
             continue
 
         with self._speaking_lock:

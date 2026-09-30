@@ -28,7 +28,7 @@ from pathlib import Path
 
 ROOT = Path(__file__).resolve().parent.parent
 TEXT_LIMIT = 5 * 1024 * 1024
-SKIP_SCAN_SUFFIXES = {".png", ".jpg", ".jpeg", ".gif", ".ico", ".svg", ".woff", ".woff2", ".ttf", ".zip", ".pyc", ".lock", ".exe", ".dll"}
+SKIP_SCAN_SUFFIXES = {".png", ".jpg", ".jpeg", ".gif", ".ico", ".svg", ".woff", ".woff2", ".ttf", ".zip", ".pyc", ".lock", ".exe", ".dll", ".onnx"}
 NEVER_SHIP = re.compile(r"(^|/)(\.env(\..+)?|.*\.session(-journal)?|data/.*|logs/.*)$")
 SECRET_NAME = re.compile(r"(KEY|SECRET|HASH|TOKEN|PASSWORD|PHONE|API_ID)", re.I)
 KEY_PATTERNS = {

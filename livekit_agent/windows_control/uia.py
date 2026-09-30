@@ -181,6 +181,25 @@ def find_element(window, query: str = "", control_type: str = "",
     return matches[index]
 
 
+def find_single_editable(window) -> BaseWrapper | None:
+    """The window's only visible, enabled text area (a Document, else an
+    Edit), or None when there are none or several to choose from."""
+    for control_type in ("Document", "Edit"):
+        found = []
+        for el in find_elements(window, control_type=control_type, limit=5):
+            try:
+                info = _element_info(el)
+            except Exception:
+                continue
+            if info["visible"] and info["enabled"]:
+                found.append(el)
+        if len(found) == 1:
+            return found[0]
+        if found:
+            return None
+    return None
+
+
 def element_to_ref(el: BaseWrapper, app: str = "", window_title: str = "") -> ElementRef:
     info = _element_info(el)
     return ElementRef(
@@ -235,12 +254,20 @@ def type_into_element(el: BaseWrapper, text: str, clear_first: bool = True) -> U
             return UIAResult(True, "Typed via UI Automation (set_edit_text).", element=el)
         except Exception:
             pass
-    # Generic fallback: real synthetic keystrokes into the focused control.
+    # Generic fallback (rich edits like Windows 11 Notepad have no
+    # set_edit_text): focus the control and paste. Not type_keys(text): it
+    # parses + ^ % ~ ( ) { } as modifiers/groups and drops newlines, so
+    # "Hello (World)" came out wrong. Clearing goes through keyboard_mouse
+    # too: pywinauto's "^a" resolves the letter with the current layout and
+    # does nothing under a Cyrillic one, so text got inserted mid-document.
     try:
+        from . import keyboard_mouse
+
+        el.set_focus()
         if clear_first:
-            el.type_keys("^a{DELETE}", set_foreground=True)
-        el.type_keys(text, with_spaces=True, with_tabs=True, set_foreground=True)
-        return UIAResult(True, "Typed via UI Automation (type_keys).", element=el)
+            keyboard_mouse.clear_field()
+        keyboard_mouse.paste_text(text)
+        return UIAResult(True, "Typed via UI Automation (focus + paste).", element=el)
     except Exception as e:
         return UIAResult(False, f"UI Automation type failed: {e}")
 
