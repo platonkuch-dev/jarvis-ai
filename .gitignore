@@ -28,3 +28,4 @@ memory/long_term.json
 voice/piper_bin/
 portfolio-site/files-to-upload/
 *.zip
+portfolio-site/.netlify/

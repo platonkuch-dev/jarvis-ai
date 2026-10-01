@@ -14,7 +14,7 @@ const SITE = {
   downloads: [
     { title: 'JARVIS AI — Windows installer', titleRu: 'JARVIS AI — установщик для Windows',
       desc: 'One-click installer with everything bundled.', descRu: 'Установщик «в один клик», всё уже внутри.',
-      meta: 'JarvisAI-Setup.exe · 280 MB', url: 'https://github.com/platonkuch-dev/jarvis_ai/releases/download/v1.0.1/JarvisAI-Setup.exe' },
+      meta: 'JarvisAI-Setup.exe · 280 MB', url: 'https://github.com/platonkuch-dev/jarvis_ai/releases/latest/download/JarvisAI-Setup.exe' },
   ],
 };
 
