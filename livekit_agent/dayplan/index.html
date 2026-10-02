@@ -6,7 +6,7 @@
 <title>Jarvis</title>
 <link rel="preconnect" href="https://fonts.googleapis.com">
 <link rel="preconnect" href="https://fonts.gstatic.com" crossorigin>
-<link href="https://fonts.googleapis.com/css2?family=Oxanium:wght@300;500;700&family=Manrope:wght@400;500;600;700&display=swap" rel="stylesheet">
+<link href="https://fonts.googleapis.com/css2?family=Oxanium:wght@300;500;700&family=Manrope:wght@400;500;600;700&family=JetBrains+Mono:wght@400;500&display=swap" rel="stylesheet">
 <style>
   :root {
     --night: #02060D;
@@ -92,6 +92,39 @@
   .btn.muted { border-color: #FF7A6E; color: #FFD2CC; background: rgba(60, 14, 18, 0.75); box-shadow: 0 0 18px rgba(255, 122, 110, 0.3); }
   .btn.muted .on { display: none; }
   .btn.muted .off { display: inline; }
+  /* Claude Code at work: a live feed card to the right of the bust (code_feed.py) */
+  .code { position: fixed; z-index: 5; top: 22vh; right: clamp(24px, 2.6vw, 64px); width: clamp(340px, 26vw, 620px);
+          max-height: 58vh; display: flex; flex-direction: column; font-family: var(--display); color: var(--ice);
+          padding: 18px 20px 16px; border: 1px solid var(--holo-dim); border-radius: 6px;
+          background: linear-gradient(180deg, rgba(6, 22, 42, 0.78), rgba(2, 8, 18, 0.7)); backdrop-filter: blur(4px);
+          box-shadow: 0 0 40px rgba(111, 216, 255, 0.08), inset 0 0 30px rgba(111, 216, 255, 0.04);
+          opacity: 0; transform: translateX(24px); pointer-events: none; transition: opacity 0.6s var(--ease), transform 0.6s var(--ease); }
+  body.coding .code { opacity: 1; transform: none; }
+  body.coding .tele.r { opacity: 0 !important; }
+  body.plan .code { opacity: 0 !important; }
+  .code h3 { display: flex; align-items: center; gap: 10px; font-weight: 500; font-size: clamp(11px, 1.05vh, 15px);
+             letter-spacing: 0.22em; color: var(--holo); padding-bottom: 10px; border-bottom: 1px solid var(--holo-dim); }
+  .code h3 .dot { width: 8px; height: 8px; border-radius: 50%; background: var(--holo); box-shadow: 0 0 10px var(--holo); flex: none; }
+  .code.run h3 .dot { animation: codePulse 1.2s ease-in-out infinite; }
+  .code.ok h3 .dot { background: #7CF2B5; box-shadow: 0 0 10px #7CF2B5; }
+  .code.fail h3 .dot { background: #FF7A6E; box-shadow: 0 0 10px #FF7A6E; }
+  .code h3 .proj { color: var(--ice); letter-spacing: 0.06em; text-transform: none; overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
+  .code h3 .time { margin-left: auto; color: var(--steel); letter-spacing: 0.08em; font-variant-numeric: tabular-nums; }
+  .code .task { font-family: var(--text); color: #9FB6CC; font-size: clamp(13px, 1.4vh, 17px); line-height: 1.4; margin: 12px 0 10px; }
+  .code .feed { flex: 1; min-height: 0; overflow: hidden; display: flex; flex-direction: column; justify-content: flex-end; gap: 7px;
+                -webkit-mask-image: linear-gradient(180deg, transparent 0, #000 22%); mask-image: linear-gradient(180deg, transparent 0, #000 22%); }
+  .code .ev { font-size: clamp(12px, 1.3vh, 16px); line-height: 1.45; animation: codeIn 0.5s var(--ease); overflow-wrap: anywhere; }
+  .code .ev.tool { font-family: "JetBrains Mono", Consolas, monospace; color: var(--holo); opacity: 0.85; }
+  .code .ev.tool::before { content: "▸ "; opacity: 0.6; }
+  .code .ev.text { font-family: var(--text); color: var(--ice); }
+  .code .res { font-family: var(--text); font-size: clamp(13px, 1.4vh, 17px); line-height: 1.45; margin-top: 12px; padding-top: 10px;
+               border-top: 1px solid var(--holo-dim); max-height: 16vh; overflow: hidden; }
+  .code .res:empty { display: none; }
+  .code .stop { align-self: flex-start; margin-top: 12px; height: 38px; font-size: 14px; }
+  body.coding .code.run .stop { pointer-events: auto; }
+  .code:not(.run) .stop { display: none; }
+  @keyframes codePulse { 50% { opacity: 0.25; } }
+  @keyframes codeIn { from { opacity: 0; transform: translateY(6px); } }
   .nogl { position: fixed; inset: 0; display: none; align-items: center; justify-content: center; color: var(--steel); }
   @media (prefers-reduced-motion: reduce) { #plan { transition-duration: 0.01s; } }
 </style>
@@ -123,6 +156,13 @@
   <div class="row"><div class="k">EXCHANGES</div><div class="v" id="tLines">0</div></div>
   <div class="row"><div class="k">PROCESSES</div><div class="v" id="tProcs">—</div></div>
 </div>
+<div class="code" id="code" aria-live="polite">
+  <h3><span class="dot"></span>CLAUDE CODE <span class="proj" id="codeProj"></span><span class="time" id="codeTime"></span></h3>
+  <div class="task" id="codeTask"></div>
+  <div class="feed" id="codeFeed"></div>
+  <div class="res" id="codeRes"></div>
+  <button class="btn stop" id="codeStop" type="button">Стоп</button>
+</div>
 <div class="subs" id="subs"></div>
 <div class="hint">Esc — назад к лицу / закрыть</div>
 <div class="dock">
@@ -138,6 +178,12 @@
       <path id="planIcon" d="M4 6h16M4 12h16M4 18h10"/>
     </svg>
     <span id="planLabel">План дня</span>
+  </button>
+  <button class="btn" id="faceBtn" type="button">
+    <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.8" stroke-linecap="round" aria-hidden="true">
+      <path d="M12 9.5a2.5 2.5 0 1 0 0 5a2.5 2.5 0 1 0 0-5M12 9.5V3M10 12.5L4 17M14 12.5l6 4.5M9.5 11L4 8M14.5 11L20 8M12 14.5V21"/>
+    </svg>
+    <span id="faceLabel">Лицо</span>
   </button>
 </div>
 <div class="nogl" id="nogl">Видеокарта не дала WebGL — лицо не нарисовать, план дня работает.</div>
@@ -243,9 +289,9 @@ function renderTele() {
 }
 
 /* ============================ live link to Jarvis ============================ */
-const LIVE = { status: "booting", level: 0, sib: 0, watching: false, plan: false, muted: false, lines: [], linesAt: 0, connected: false };
+const LIVE = { status: "booting", level: 0, sib: 0, watching: false, plan: false, face: false, muted: false, lines: [], linesAt: 0, connected: false };
 // a button press wins over the stream for a moment, until the server's state file catches up
-const OVERRIDE = { plan: 0, mic: 0 };
+const OVERRIDE = { plan: 0, mic: 0, face: 0 };
 function connect() {
   let es;
   try { es = new EventSource("/events"); } catch (e) { return; }
@@ -257,8 +303,11 @@ function connect() {
     const t = performance.now();
     if (t > OVERRIDE.plan) LIVE.plan = FACE_ONLY ? false : !!m.p;
     if (t > OVERRIDE.mic) LIVE.muted = !!m.m;
+    if (t > OVERRIDE.face) LIVE.face = !!m.f;
     renderDock();
     if (m.lines) { LIVE.lines = m.lines; LIVE.linesAt = performance.now(); renderSubs(); }
+    if (m.code) { CODE.s = m.code; renderCode(); }
+    if (m.t) noteTool(m.t);
   };
   es.onerror = () => { LIVE.connected = false; };
 }
@@ -276,6 +325,37 @@ function renderSubs() {
   $("subs").innerHTML = html;
   $("subs").style.opacity = 1;
 }
+// Claude Code's live session (code_feed.py): shown while it works and for a while after
+const CODE = { s: {}, shownEvents: 0 };
+const CODE_LINGER_S = 120;
+function renderCode() {
+  const s = CODE.s, box = $("code");
+  const recent = s.finished && Date.now() / 1000 - s.finished < CODE_LINGER_S;
+  const visible = !!(s.active || recent);
+  document.body.classList.toggle("coding", visible);
+  if (!visible) return;
+  box.classList.toggle("run", !!s.active);
+  box.classList.toggle("ok", !s.active && s.ok === true);
+  box.classList.toggle("fail", !s.active && s.ok === false);
+  $("codeProj").textContent = s.project ? "· " + s.project : "";
+  $("codeTask").textContent = s.task || "";
+  let evs = (s.events || []).slice(-14);
+  // once done, Claude's last words are the result shown below -- don't repeat them in the feed
+  const norm = (t) => String(t || "").replace(/\s+/g, " ").trim();
+  if (!s.active && evs.length && evs[evs.length - 1].k === "text" && norm(evs[evs.length - 1].x) === norm(s.result)) evs = evs.slice(0, -1);
+  $("codeFeed").innerHTML = evs.map((e) => `<div class="ev ${e.k === "tool" ? "tool" : "text"}">${esc(e.x)}</div>`).join("");
+  $("codeRes").textContent = s.active ? "" : (s.result || "");
+}
+function tickCode() {
+  const s = CODE.s;
+  if (!s.started) return;
+  const end = s.active ? Date.now() / 1000 : (s.finished || Date.now() / 1000);
+  const sec = Math.max(0, Math.round(end - s.started));
+  $("codeTime").textContent = `${Math.floor(sec / 60)}:${pad(sec % 60)}`;
+  if (!s.active && s.finished && Date.now() / 1000 - s.finished >= CODE_LINGER_S) renderCode();
+}
+setInterval(tickCode, 1000);
+$("codeStop").addEventListener("click", (e) => { if (e.detail > 0) control({ code_stop: true }); });
 // "открой план": the bust flies back into the source orb, then the plan page opens out of it;
 // "закрой план": the page folds back into the orb and the orbs fly out to rebuild the bust.
 const PLAN = { open: false, closingUntil: 0 };
@@ -286,18 +366,21 @@ async function control(body) {
   } catch (e) { /* the server is restarting; the stream will resync */ }
 }
 function setPlan(on) { LIVE.plan = on; OVERRIDE.plan = performance.now() + 1200; renderDock(); control({ plan: on }); }
+function setFace(on) { LIVE.face = on; OVERRIDE.face = performance.now() + 1200; renderDock(); control({ face: on }); }
 function setMic(on) { LIVE.muted = !on; OVERRIDE.mic = performance.now() + 1200; renderDock(); control({ mic: on }); }
 function renderDock() {
   const mic = $("micBtn");
   mic.classList.toggle("muted", LIVE.muted);
   mic.setAttribute("aria-pressed", String(LIVE.muted));
   mic.title = LIVE.muted ? "Включить микрофон" : "Выключить микрофон";
-  $("planLabel").textContent = LIVE.plan ? "Назад к лицу" : "План дня";
+  $("planLabel").textContent = LIVE.plan ? "Назад" : "План дня";
   $("planIcon").setAttribute("d", LIVE.plan ? "M15 5l-7 7 7 7" : "M4 6h16M4 12h16M4 18h10");
+  $("faceLabel").textContent = LIVE.face ? "Нейрон" : "Лицо";
+  $("faceBtn").title = LIVE.face ? "Снова стать нейроном" : "Показать лицо";
 }
 // Only a real mouse/touch press counts (e.detail > 0): a button keeps focus after a click, and
 // a stray Space/Enter while this full-screen window is active must not silently mute Jarvis.
-for (const [id, act] of [["micBtn", () => setMic(LIVE.muted)], ["planBtn", () => setPlan(!LIVE.plan)]]) {
+for (const [id, act] of [["micBtn", () => setMic(LIVE.muted)], ["planBtn", () => setPlan(!LIVE.plan)], ["faceBtn", () => setFace(!LIVE.face)]]) {
   const b = $(id);
   b.addEventListener("mousedown", (e) => e.preventDefault());       // don't take keyboard focus
   b.addEventListener("click", (e) => { b.blur(); if (e.detail > 0) act(); });
@@ -408,31 +491,52 @@ function ridge(x, z) {       // ridged multifractal: sharp crests, wide valleys 
   return h;
 }
 
-const K_SURF = 0, K_NERVE = 3, K_DUST = 4, K_MTN = 5, K_FLY = 6;
+// The neural network's layout, shared by the model builder (in its worker) and the page (labels,
+// flashes): the core, then seven blocks on a tilted ring around it.
+function netLayout() {
+  const c = [[0, 0.05, 0.1]];
+  for (let i = 0; i < 7; i++) {
+    const a = -Math.PI / 2 + 0.45 + (i / 7) * Math.PI * 2;
+    c.push([2.5 * Math.cos(a), 0.25 + 0.45 * Math.sin(2 * a + 0.8), 0.1 + 1.7 * Math.sin(a)]);
+  }
+  return c;
+}
+const K_SURF = 0, K_NEU = 2, K_NERVE = 3, K_DUST = 4, K_MTN = 5, K_FLY = 6;
 function buildModel(prm) {
   let rnd = 7; const rand = () => ((rnd = (rnd * 16807) % 2147483647) / 2147483647);
   const P = [], N = [], I = [];
   const add = (p, n, kind, base) => { P.push(p[0], p[1], p[2]); N.push(n[0], n[1], n[2]); I.push(kind, 0, rand(), base); };
 
   // contour rings over the whole bust
+  // Each ring is walked from the BACK of the head (th = pi), and its bead spacing is stretched a
+  // touch so a whole number of beads fills the loop exactly. Walking from the front with a fixed
+  // step left the remainder as an extra-wide gap right where every ring closed -- the dead
+  // centre of the face -- and stacked ring after ring, those gaps read as a vertical slit.
   const NA = 720;
   for (let y0 = -1.36; y0 < 3.3; y0 += prm.ring) {
     const ring = [];
     for (let i = 0; i < NA; i++) {
-      const p = surfaceAt(y0, (i / NA) * Math.PI * 2);
+      const p = surfaceAt(y0, Math.PI + (i / NA) * Math.PI * 2);
       if (p) ring.push(p);
     }
     if (ring.length < 8) continue;
     const fade = 1 - ss((y0 - 2.55) / 0.7);
-    let acc = 0;
+    // spacing in "bead units": dense beads in front, sparser behind
+    const units = [];
+    let total = 0;
     for (let i = 0; i < ring.length; i++) {
       const a = ring[i], b = ring[(i + 1) % ring.length];
-      const seg = Math.hypot(b[0] - a[0], b[2] - a[2]);
-      const step = a[2] < RC - 0.05 ? prm.front : prm.back;   // dense beads in front, sparser behind
-      acc += seg;
-      while (acc >= step) {
-        acc -= step;
-        const t = seg > 0 ? 1 - acc / seg : 0;
+      const u = Math.hypot(b[0] - a[0], b[2] - a[2]) / (a[2] < RC - 0.05 ? prm.front : prm.back);
+      units.push(u); total += u;
+    }
+    const per = total / Math.max(1, Math.round(total));     // ~1, so the beads close the loop evenly
+    let acc = per / 2;                                       // half a bead past the (hidden) start
+    for (let i = 0; i < ring.length; i++) {
+      const a = ring[i], b = ring[(i + 1) % ring.length], u = units[i];
+      acc += u;
+      while (acc >= per) {
+        acc -= per;
+        const t = u > 0 ? 1 - acc / u : 0;
         const p = [a[0] + (b[0] - a[0]) * t, y0, a[2] + (b[2] - a[2]) * t];
         add(p, normalAt(p[0], p[1], p[2]), K_SURF, fade);
       }
@@ -490,14 +594,161 @@ function buildModel(prm) {
       I.push(K_FLY, I[i * 4 + 1], rand(), 1);
     }
   }
+  // ------------------------- the network: Jarvis's main form -------------------------
+  // The core neuron (id 0) in the middle and one smaller neuron per block of Jarvis around it
+  // (netLayout(); the page names them: voice, memory, vision, messaging, internet, system, code),
+  // wired to the core by long fibres and to their neighbours by faint threads -- all drawn in the
+  // bust's own style, rings of beads.
+  // aInfo: (K_NEU, distance along its own process 0..1 (-0.05 = nucleus), id * 4 + type + phase, brightness);
+  // type 0 = body and dendrites, 1 = the core's axon, 2 = fibre to the core, 3 = thread to the next block.
+  const nNeu0 = P.length / 3;
+  const NET = netLayout();
+  const NP = [], NN = [], NI = [];
+  const addN = (p, n, dist, id, type, ph, base) => { NP.push(p); NN.push(n); NI.push([dist, id, type, ph * 0.98, base]); };
+  const nrm = (v) => { const l = Math.hypot(v[0], v[1], v[2]) || 1; return [v[0] / l, v[1] / l, v[2] / l]; };
+  const cross = (a, b) => [a[1] * b[2] - a[2] * b[1], a[2] * b[0] - a[0] * b[2], a[0] * b[1] - a[1] * b[0]];
+  const sp = prm.front * 1.6;                                   // bead spacing on the membrane
+  const fib = (n, cb) => { for (let i = 0; i < n; i++) { const y = 1 - 2 * (i + 0.5) / n, r = Math.sqrt(1 - y * y), th = i * 2.399963; cb([Math.cos(th) * r, y, Math.sin(th) * r]); } };
+  // a lumpy soma, a touch pyramidal (narrow on top, wide at the base)
+  const lumpy = (d, R) => R * (1 + 0.10 * Math.sin(d[0] * 5.1 + 1.3) * Math.sin(d[1] * 4.3) + 0.07 * Math.sin(d[2] * 6.7 + d[0] * 3.1))
+    * (1 - 0.18 * Math.max(0, -d[1]) + 0.12 * Math.max(0, d[1]));
+  // soma + nucleus envelope + the hot nucleolus; returns what the processes need to know
+  const body = (id, C, R) => {
+    fib(Math.max(80, Math.round(4 * Math.PI * R * R / (sp * sp))), (d) => {
+      const r = lumpy(d, R);
+      addN([C[0] + d[0] * r, C[1] + d[1] * r, C[2] + d[2] * r], d, 0, id, 0, rand(), 0.55);
+    });
+    const rn = R * 0.375, ro = R * 0.125, o1 = R * 0.075, o2 = R * 0.125;
+    fib(Math.max(50, Math.round(4 * Math.PI * rn * rn / (sp * sp * 0.5))), (d) =>
+      addN([C[0] + o1 + d[0] * rn, C[1] - o1 + d[1] * rn, C[2] + d[2] * rn], d, -0.05, id, 0, rand(), 0.5));
+    fib(Math.max(40, Math.round(4 * Math.PI * ro * ro / (sp * sp * 0.3))), (d) => {
+      const q = ro * Math.pow(rand(), 0.4);
+      addN([C[0] + o2 + d[0] * q, C[1] - o2 + d[1] * q, C[2] + d[2] * q], d, -0.05, id, 0, rand(), 1.6);
+    });
+    return {
+      C,
+      inside: (b) => { const v = [b[0] - C[0], b[1] - C[1], b[2] - C[2]]; return Math.hypot(v[0], v[1], v[2]) < lumpy(nrm(v), R) * 1.02; },
+      at: (d) => { d = nrm(d); const q = lumpy(d, R) * 0.92; return [C[0] + d[0] * q, C[1] + d[1] * q, C[2] + d[2] * q]; },
+    };
+  };
+  const bulb = (c, rad, dist, id, type, ph, base) => fib(Math.max(10, Math.round(4 * Math.PI * rad * rad / (sp * sp))), (d) =>
+    addN([c[0] + d[0] * rad, c[1] + d[1] * rad, c[2] + d[2] * rad], d, dist, id, type, ph, base));
+  // one ring of beads around a process; beads that fall inside a body are skipped (they doubled
+  // up into white blotches where a process leaves its soma)
+  const ring = (cells, p, d, r, dist, id, type, ph, base, tw) => {
+    const u = nrm(cross(d, Math.abs(d[1]) < 0.9 ? [0, 1, 0] : [1, 0, 0])), v = cross(d, u);
+    const n = Math.max(3, Math.round(2 * Math.PI * r / sp));
+    for (let k = 0; k < n; k++) {
+      const a = tw + (k / n) * 2 * Math.PI, c = Math.cos(a), sn = Math.sin(a);
+      const nv = [u[0] * c + v[0] * sn, u[1] * c + v[1] * sn, u[2] * c + v[2] * sn];
+      const b = [p[0] + nv[0] * r, p[1] + nv[1] * r, p[2] + nv[2] * r];
+      if (cells.some((x) => x.inside(b))) continue;
+      addN(b, nv, dist, id, type, ph, base);
+    }
+    return [u, v];
+  };
+  // one process: walks with a slowly turning wander, tapers, sheds spines and forks
+  const grow = (cell, p, dir, rad, len, depth, dist, id, ph, o) => {
+    let d = nrm(dir), wob = [0, 0, 0];
+    const steps = Math.max(2, Math.round(len / sp)), tw0 = rand() * 6.28, C = cell.C;
+    for (let s = 0; s < steps; s++) {
+      wob = nrm([wob[0] + (rand() - 0.5) * 0.6, wob[1] + (rand() - 0.5) * 0.6, wob[2] + (rand() - 0.5) * 0.6]);
+      const pull = o.target ? nrm([o.target[0] - p[0], o.target[1] - p[1], o.target[2] - p[2]]) : nrm([p[0] - C[0], p[1] - C[1], p[2] - C[2]]);
+      const wk = o.wander ?? 0.07, pk = o.pull ?? 0.02;
+      d = nrm([d[0] + wob[0] * wk + pull[0] * pk, d[1] + wob[1] * wk + pull[1] * pk, d[2] + wob[2] * wk + pull[2] * pk]);
+      p = [p[0] + d[0] * sp, p[1] + d[1] * sp, p[2] + d[2] * sp];
+      dist += sp;
+      let r = Math.max(0.006, rad * (1 - 0.8 * s / steps)), base = 0.5;
+      if (o.axon) {                                          // myelin sheaths between the nodes of Ranvier
+        const f = (dist % 0.24) / 0.24;
+        r = f < 0.84 ? rad * (1.15 + 0.5 * Math.sin(Math.PI * f / 0.84)) : rad * 0.6;
+        base = f < 0.84 ? 0.55 : 0.9;
+      }
+      const [u, v] = ring([cell], p, d, r, dist, id, o.axon ? 1 : 0, ph, base, tw0 + s * 0.35);
+      if (!o.axon && depth > 0 && rand() < 0.22) {           // dendritic spines
+        const a = rand() * 6.28, nv = nrm([u[0] * Math.cos(a) + v[0] * Math.sin(a), u[1] * Math.cos(a) + v[1] * Math.sin(a), u[2] * Math.cos(a) + v[2] * Math.sin(a)]);
+        const L = 0.02 + rand() * 0.03;
+        for (let q = 0; q <= L; q += sp * 0.8) addN([p[0] + nv[0] * (r + q), p[1] + nv[1] * (r + q), p[2] + nv[2] * (r + q)], nv, dist, id, 0, ph, 0.45);
+        addN([p[0] + nv[0] * (r + L + 0.008), p[1] + nv[1] * (r + L + 0.008), p[2] + nv[2] * (r + L + 0.008)], nv, dist, id, 0, ph, 1.0);
+      }
+      if (!o.axon && depth < (o.maxDepth ?? 3) && s > 5 && s < steps - 6 && rand() < (o.fork ?? 0.03)) {
+        const side = nrm(cross(d, [rand() - 0.5, rand() - 0.5, rand() - 0.5]));
+        const ang = 0.4 + rand() * 0.45;
+        const nd = [d[0] * Math.cos(ang) + side[0] * Math.sin(ang), d[1] * Math.cos(ang) + side[1] * Math.sin(ang), d[2] * Math.cos(ang) + side[2] * Math.sin(ang)];
+        grow(cell, p.slice(), nd, r * 0.72, (steps - s) * sp * (0.55 + rand() * 0.35), depth + 1, dist, id, ph, { ...o, target: null });
+      }
+    }
+    return { p, d, dist };
+  };
+  // a fibre between two bodies: a cubic arc with small swellings (varicosities) along it
+  const fibre = (ca, cb, id, type, rad, base) => {
+    const ab = nrm([cb.C[0] - ca.C[0], cb.C[1] - ca.C[1], cb.C[2] - ca.C[2]]);
+    const a = ca.at(ab), d = cb.at([-ab[0], -ab[1], -ab[2]]);
+    const side = nrm(cross(ab, [0, 1, 0])), up = cross(side, ab);
+    const span = Math.hypot(d[0] - a[0], d[1] - a[1], d[2] - a[2]);
+    const s1 = (rand() - 0.5) * 0.5 * span, s2 = (rand() - 0.5) * 0.4 * span;
+    const off = [side[0] * s1 + up[0] * s2, side[1] * s1 + up[1] * s2, side[2] * s1 + up[2] * s2];
+    const b = [a[0] + ab[0] * span * 0.33 + off[0], a[1] + ab[1] * span * 0.33 + off[1], a[2] + ab[2] * span * 0.33 + off[2]];
+    const c = [d[0] - ab[0] * span * 0.33 + off[0] * 0.7, d[1] - ab[1] * span * 0.33 + off[1] * 0.7, d[2] - ab[2] * span * 0.33 + off[2] * 0.7];
+    const bez = (t) => { const u = 1 - t; return [0, 1, 2].map((k) => u * u * u * a[k] + 3 * u * u * t * b[k] + 3 * u * t * t * c[k] + t * t * t * d[k]); };
+    let L = 0;
+    for (let i = 0; i < 40; i++) { const p0 = bez(i / 40), p1 = bez((i + 1) / 40); L += Math.hypot(p1[0] - p0[0], p1[1] - p0[1], p1[2] - p0[2]); }
+    const steps = Math.max(8, Math.round(L / sp)), ph = rand(), tw0 = rand() * 6.28;
+    for (let s = 0; s <= steps; s++) {
+      const t = s / steps, p = bez(t), p2 = bez(Math.min(1, t + 0.01)), p1 = bez(Math.max(0, t - 0.01));
+      const f = ((t * L) % 0.3) / 0.3, bump = Math.exp(-Math.pow((f - 0.5) * 7, 2));
+      ring([ca, cb], p, nrm([p2[0] - p1[0], p2[1] - p1[1], p2[2] - p1[2]]), rad * (1 + 0.7 * bump), t, id, type, ph, base * (1 + 0.5 * bump), tw0 + s * 0.4);
+    }
+    if (type === 2) bulb(d, 0.034, 1, id, 2, ph, 0.6);       // the synapse onto the block's body
+  };
+
+  // the core: an apical dendrite rising into a tuft, basal dendrites, an axon down into the orb
+  const core = body(0, NET[0], 0.40);
+  const ap = grow(core, core.at([0, -1, 0]), [0.04, -1, 0.02], 0.09, 0.55, 0, 0, 0, rand(), { wander: 0.012, pull: 0.0, fork: 0.015, maxDepth: 1 });
+  for (let k = 0; k < 6; k++) {
+    const a = (k / 6) * 6.28 + rand() * 0.5;
+    grow(core, ap.p.slice(), [Math.cos(a) * 0.9, -0.7, Math.sin(a) * 0.9], 0.035, 0.35 + rand() * 0.25, 1, ap.dist, 0, rand(), { fork: 0.05, wander: 0.05 });
+  }
+  for (let k = 0; k < 8; k++) {
+    const a = (k / 8) * 6.28 + rand() * 0.4, dir = [Math.cos(a), -0.35 + rand() * 0.5, Math.sin(a) * 0.8];
+    grow(core, core.at(dir), dir, 0.062, 0.85 + rand() * 0.45, 0, 0, 0, rand(), { fork: 0.04, wander: 0.05, pull: 0.03 });
+  }
+  const ax = grow(core, core.at([0, 1, 0]), [0.08, 1, -0.05], 0.034, 2.05, 0, 0, 0, rand(), { axon: true, wander: 0.03, pull: 0.05, target: [0.0, 2.3, 0.05] });
+  for (let k = 0; k < 8; k++) {
+    const a = (k / 8) * 6.28, tdir = [Math.cos(a), 0.5 + rand() * 0.6, Math.sin(a)];
+    const t = grow(core, ax.p.slice(), tdir, 0.016, 0.18 + rand() * 0.22, 3, ax.dist, 0, rand(), { axon: true, wander: 0.12, pull: 0.0 });
+    bulb(t.p, 0.032, t.dist, 0, 1, rand(), 0.55);             // synaptic bouton
+  }
+  // the blocks: small neurons with dendrites reaching away from the core
+  const cells = [core];
+  for (let i = 1; i < NET.length; i++) {
+    const C = NET[i], cell = body(i, C, 0.17);
+    cells.push(cell);
+    const away = nrm([C[0] - NET[0][0], C[1] - NET[0][1], C[2] - NET[0][2]]);
+    for (let k = 0; k < 6; k++) {
+      const dir = nrm([away[0] + (rand() - 0.5) * 1.9, away[1] + (rand() - 0.5) * 1.9, away[2] + (rand() - 0.5) * 1.9]);
+      grow(cell, cell.at(dir), dir, 0.032, 0.38 + rand() * 0.32, 1, 0, i, rand(), { fork: 0.07, wander: 0.08, maxDepth: 2 });
+    }
+  }
+  for (let i = 1; i < cells.length; i++) fibre(core, cells[i], i, 2, 0.021, 0.5);                       // core -> block
+  for (let i = 1; i < cells.length; i++) fibre(cells[i], cells[i % (cells.length - 1) + 1], i, 3, 0.009, 0.32); // ring of threads
+
+  const maxD = {};
+  for (const x of NI) if (x[2] < 2) maxD[x[1] * 4 + x[2]] = Math.max(maxD[x[1] * 4 + x[2]] || 0, x[0]);
+  for (let i = 0; i < NP.length; i++) {
+    const [dist, id, type, ph, base] = NI[i];
+    P.push(NP[i][0], NP[i][1], NP[i][2]); N.push(NN[i][0], NN[i][1], NN[i][2]);
+    I.push(K_NEU, type < 2 && dist > 0 ? dist / maxD[id * 4 + type] : dist, id * 4 + type + ph, base);
+  }
   const n = P.length / 3;
-  return { P: new Float32Array(P), N: new Float32Array(N), I: new Float32Array(I), n, nSurf, nBust, nFly0 };
+  return { P: new Float32Array(P), N: new Float32Array(N), I: new Float32Array(I), n, nSurf, nBust, nFly0, nNeu0 };
 }
 
 const VS = `
 attribute vec3 aPos; attribute vec3 aNorm; attribute vec4 aInfo;
 uniform vec2 uRes; uniform vec2 uC; uniform float uS; uniform vec2 uOrb; uniform float uDpr; uniform float uHor;
-uniform float uT, uE, uSib, uTh, uYaw, uPitch, uRoll, uAsmT, uMode, uPass, uScene, uBead;
+uniform float uT, uE, uSib, uTh, uYaw, uPitch, uRoll, uAsmT, uMode, uPass, uScene, uBead, uN, uNT, uGhost;
+uniform vec3 uCen[8]; uniform vec3 uHue[8]; uniform float uAct[8]; uniform vec3 uNRot;
 varying vec3 vCol; varying float vA; varying float vGlow; varying float vPx;
 const vec3 CYAN = vec3(0.10, 0.52, 1.00);
 const vec3 RIM = vec3(0.55, 0.92, 1.00);
@@ -529,6 +780,114 @@ void main() {
     gl_PointSize = (uPass > 0.5 ? 7.0 : 2.6) * max(0.75, k * 1.6) * uDpr;
     vPx = gl_PointSize;
     gl_Position = vec4(scr.x / uRes.x * 2.0 - 1.0, 1.0 - scr.y / uRes.y * 2.0, 0.2 + z / 40.0, 1.0);
+    return;
+  }
+
+  if (kind == 2.0) {        // the neural network: Jarvis's main form
+    vec3 p = aPos, n = aNorm;
+    float dist = order;
+    float id = floor(seed / 4.0 + 0.001);
+    float local = seed - id * 4.0;
+    float type = floor(local + 0.001);
+    float ph = fract(local);
+    int ii = int(id + 0.5);
+    vec3 NC = uCen[ii];
+    vec3 hue = uHue[ii];
+    float act = uAct[ii];
+    float core = 1.0 - step(0.5, id);
+    float isAxon = step(0.5, type) * (1.0 - step(1.5, type));
+    float isLink = step(1.5, type), isMesh = step(2.5, type);
+    float nuc = step(dist, -0.01);
+    float soma = (1.0 - isLink) * (1.0 - smoothstep(0.0, 0.05, max(dist, 0.0)));
+    float pseed = ph * 6.2832 + id * 1.3;
+    // bodies breathe; the core swells with the voice, a block with its own activity
+    p = NC + (p - NC) * (1.0 + (0.022 * sin(uT * 1.4 + id * 1.7)
+        + (0.07 * core * uE + 0.06 * act) * (0.6 + 0.4 * sin(uT * 17.0 + ph * 40.0))) * soma);
+    float tip = clamp(dist, 0.0, 1.0) * (1.0 - isAxon) * (1.0 - isLink);
+    p.x += sin(uT * 0.7 + p.y * 1.7 + pseed) * 0.035 * tip;
+    p.z += cos(uT * 0.6 + p.x * 1.5 + pseed) * 0.035 * tip;
+
+    mat3 R = rot(uNRot.x, uNRot.y, uNRot.z);
+    vec3 PV = vec3(0.0, 0.35, 0.1);
+    vec3 q = R * (p - PV) + PV;
+    vec3 Cq = R * (NC - PV) + PV;
+    vec3 nn = R * n;
+
+    // Assembly (uN: 0 shown, 1 assemble, 2 dissolve = the same played back faster, 3 gone): a wide
+    // river of particles pours in from the left edge of the screen and every bead glides to its
+    // own place along one smooth cubic curve with a quintic ease -- no spin, no jitter -- so the
+    // network fills in from left to right. uGhost 1..3 re-draw the same beads as mist with their
+    // own hashes: it rides the river and thins out just before landing, making the stream several
+    // times denser than the network it builds.
+    float alive = 1.0, front = 0.0, fly = 0.0;
+    float ghost = step(0.5, uGhost);
+    if (uN > 0.5 && uN < 2.5) {
+      float T = uN < 1.5 ? uNT : 6.6 * (1.0 - uNT / 2.6);
+      float hs = dot(aPos, vec3(12.9898, 78.233, 37.719)) + dot(aNorm, vec3(3.13, 5.71, 7.31)) + uGhost * 17.31;
+      float h = fract(sin(hs) * 43758.5453);
+      float h2 = fract(sin(hs * 1.37 + 4.1) * 24634.6345);
+      float h3 = fract(sin(hs * 0.73 + 9.7) * 35165.1234);
+      float key = clamp((q.x + 3.2) / 6.4, 0.0, 1.0);             // left beads land first
+      float start = 0.15 + 2.9 * key + 1.1 * h;
+      float dur = 1.6 + 0.8 * h2;
+      float kk = clamp((T - start) / dur, 0.0, 1.0);
+      float e = kk * kk * kk * (kk * (kk * 6.0 - 15.0) + 10.0);
+      vec3 home = q;
+      if (ghost > 0.5) home += (vec3(h, h2, h3) - 0.5) * 0.35;
+      vec3 P0 = vec3(-uC.x / uS - 0.5 - 1.6 * h3, 0.35 + (h2 - 0.5) * 2.4, (h - 0.5) * 2.0);
+      vec3 P1 = vec3(mix(P0.x, home.x, 0.45), 0.3 + (h2 - 0.5) * 1.1 + 0.25 * sin(h3 * 6.2832), (h - 0.5) * 1.2);
+      vec3 P2 = home - vec3(0.8 + 0.7 * h, 0.0, 0.0) + (home - Cq) * 0.3;
+      float u = 1.0 - e;
+      q = u * u * u * P0 + 3.0 * u * u * e * P1 + 3.0 * u * e * e * P2 + e * e * e * home;
+      alive = smoothstep(0.0, 0.08, kk) * step(0.0, T - start);
+      fly = alive * (1.0 - smoothstep(0.7, 1.0, e));
+      if (ghost > 0.5) alive *= 1.0 - smoothstep(0.55, 0.95, e);
+      else front = 0.35 * exp(-pow((T - start - dur) * 5.0, 2.0)) * step(0.0, T - start);
+    } else if (uN > 2.5 || ghost > 0.5) alive = 0.0;
+
+    float k = 6.0 / (6.0 + q.z);
+    vec2 scr = uC + q.xy * uS * k;
+
+    float fres = pow(1.0 - abs(nn.z), 2.2);
+    float diff = max(dot(nn, normalize(LIGHT)), 0.0);
+    float I = base * (0.2 + 0.5 * diff + 1.3 * fres);
+    I *= mix(1.0, 0.36, smoothstep(-0.4, 1.2, q.z));                // the far side recedes
+    I *= core > 0.5 ? 1.0 : 0.8 + 0.9 * act;
+    vec3 col = mix(CYAN, RIM, clamp(fres * 1.3 + diff * 0.3, 0.0, 1.0));
+    col = mix(col, hue, (1.0 - core) * (0.22 + 0.45 * act) * (1.0 - 0.5 * isMesh));
+    // action potentials: in along dendrites to a body, out along the axon and the fibres
+    float spd = 0.3 + core * (1.1 * uTh + 0.6 * uE) + 1.4 * act;
+    float sgn = (isAxon + isLink) > 0.5 ? -1.0 : 1.0;
+    float w = dist * (isLink > 0.5 ? 9.0 : 7.0) + sgn * uT * spd * 6.0 + pseed;
+    float pulse = pow(max(0.0, sin(w)), 40.0) * step(0.0, dist);
+    float pAmp = isLink > 0.5 ? (0.2 + 2.2 * act) * (1.0 - 0.5 * isMesh) : 0.9 + core * (1.6 * uE + 0.8 * uTh) + 1.4 * act;
+    vec3 pcol = core > 0.5 ? mix(vec3(0.75, 0.97, 1.0), YELLOW, clamp(uE * 1.4, 0.0, 1.0)) : mix(vec3(0.85, 0.97, 1.0), hue, 0.55);
+    col = mix(col, pcol, clamp(pulse * pAmp, 0.0, 1.0));
+    I += pulse * pAmp * base;
+    if (nuc > 0.5) {
+      if (core > 0.5) {                  // the core's nucleus burns like the face's core
+        col = mix(ORANGE, YELLOW, clamp(0.3 + 1.2 * uE, 0.0, 1.0));
+        col = mix(col, vec3(0.85, 0.97, 1.0), uTh * 0.8);
+        I = base * (0.18 + 0.9 * fres + 0.15 * sin(uT * 2.0 + ph * 6.0) + 1.1 * uE + 0.3 * uTh);
+      } else {                           // a block's nucleus glows in its own colour
+        col = mix(hue, vec3(1.0), 0.2 + 0.3 * act);
+        I = base * (0.22 + 0.9 * fres + 0.12 * sin(uT * 2.0 + ph * 6.0 + id) + 1.3 * act);
+      }
+    }
+    float mist = (0.30 + 0.25 * fract(seed * 2.39 + dist * 3.7)) * (1.0 - 0.45 * ghost);
+    col = mix(col, vec3(0.62, 0.90, 1.0), fly);
+    I = mix(I, mist, fly);
+    col = mix(col, vec3(0.85, 0.98, 1.0), clamp(front, 0.0, 1.0));
+    I = (I + front * 1.4) * alive;
+
+    float size = uBead * k * (1.0 + 0.5 * front) * (1.0 - 0.25 * fly) * (1.0 - 0.2 * ghost);
+    vCol = col;
+    vA = I;
+    if (uPass > 1.5) { vA = 0.0; size = 0.0; }
+    else if (uPass > 0.5) { size *= 3.0 + 2.0 * fres * (1.0 - fly); vA = I * (0.07 * fres * fres * (1.0 - fly) + 0.12 * pulse * pAmp + 0.10 * nuc + 0.2 * front + 0.04 * act + 0.05 * fly); }
+    gl_PointSize = vA < 0.004 ? 0.0 : size * uDpr;
+    vPx = gl_PointSize;
+    gl_Position = vec4(scr.x / uRes.x * 2.0 - 1.0, 1.0 - scr.y / uRes.y * 2.0, q.z / 40.0, 1.0);
     return;
   }
 
@@ -726,7 +1085,7 @@ function initGL() {
     if (!gl.getProgramParameter(prog, gl.LINK_STATUS)) throw new Error(gl.getProgramInfoLog(prog));
   } catch (e) { console.error(e); prog = null; $("nogl").style.display = "flex"; return; }
   gl.useProgram(prog);
-  for (const u of ["uRes", "uC", "uS", "uOrb", "uDpr", "uHor", "uT", "uE", "uSib", "uTh", "uYaw", "uPitch", "uRoll", "uAsmT", "uMode", "uPass", "uScene", "uBead"])
+  for (const u of ["uRes", "uC", "uS", "uOrb", "uDpr", "uHor", "uT", "uE", "uSib", "uTh", "uYaw", "uPitch", "uRoll", "uAsmT", "uMode", "uPass", "uScene", "uBead", "uN", "uNT", "uGhost", "uCen", "uHue", "uAct", "uNRot"])
     U[u] = gl.getUniformLocation(prog, u);
   gl.enable(gl.BLEND); gl.blendFunc(gl.ONE, gl.ONE);
   gl.clearColor(0, 0, 0, 0);
@@ -734,7 +1093,7 @@ function initGL() {
   loadModel().then(uploadModel).catch((e) => console.error("bust build failed", e));
 }
 
-const MODEL_VERSION = 6;
+const MODEL_VERSION = 15;  // 12: + the neuron (main form); 7: rings close evenly, seam at the back of the head
 function modelParams() {
   const clamp = (v, a, b) => Math.min(b, Math.max(a, v));
   // spacing in real device pixels: a 4K screen at 150 % scaling has 1.5x the pixels per CSS px
@@ -766,9 +1125,9 @@ async function loadModel() {
   if (!m) {
     // the sculpt + slicing code runs as-is inside a worker, so the page keeps animating the orb
     const fnSrc = (f) => (f.toString().startsWith("function") ? f.toString() : `const ${f.name} = ${f.toString()};`);
-    const body = [ss, hypot3, sdEll, sdCap, smin, ssub, sdf, surfaceAt, normalAt, hash2, noise2, ridge, buildModel]
+    const body = [ss, hypot3, sdEll, sdCap, smin, ssub, sdf, surfaceAt, normalAt, netLayout, hash2, noise2, ridge, buildModel]
       .map(fnSrc).join("\n")
-      + "\nconst RC = " + RC + ";\nconst K_SURF = 0, K_NERVE = 3, K_DUST = 4, K_MTN = 5, K_FLY = 6;"
+      + "\nconst RC = " + RC + ";\nconst K_SURF = 0, K_NEU = 2, K_NERVE = 3, K_DUST = 4, K_MTN = 5, K_FLY = 6;"
       + "\nonmessage = (e) => { const m = buildModel(e.data); postMessage(m, [m.P.buffer, m.N.buffer, m.I.buffer]); };";
     const head = "";
     const url = URL.createObjectURL(new Blob([head + body], { type: "text/javascript" }));
@@ -795,30 +1154,48 @@ function uploadModel(m) {
 const ASM_S = 4.6, DIS_S = 3.2, WAKE_S = 5.1;
 const ST = { mode: "ember", t0: performance.now(), energy: 0, think: 0, wake: 1, scene: 0, slept: false };
 function begin(mode) { ST.mode = mode; ST.t0 = performance.now(); }
+// The neuron is Jarvis's main form; "покажи лицо" (LIVE.face) folds it away and the face
+// assembles out of the orb, "убери лицо" plays it the other way. One form on screen at a time.
+const N_ASM_S = 6.6, N_DIS_S = 2.6;
+const NS = { mode: "ember", t0: performance.now(), booted: false };
+function nbegin(mode) { NS.mode = mode; NS.t0 = performance.now(); }
 function drive(now) {
-  const s = LIVE.status;
+  const s = LIVE.status, face = !!LIVE.face;
+  const faceOn = ST.mode === "shown" || ST.mode === "assemble" || ST.mode === "wake";
+  const neuOn = NS.mode === "shown" || NS.mode === "assemble";
   if (LIVE.plan) {
-    if (ST.mode === "shown" || ST.mode === "assemble" || ST.mode === "wake") begin("dissolve");
-    if (ST.mode === "ember" && !PLAN.open) openPlan();
+    if (faceOn) begin("dissolve");
+    if (neuOn) nbegin("dissolve");
+    if (ST.mode === "ember" && NS.mode === "ember" && !PLAN.open) openPlan();
   } else {
     if (PLAN.open) closePlan(now);
-    if (s === "sleeping") {
-      ST.slept = true;
-      if (ST.mode === "shown" || ST.mode === "assemble" || ST.mode === "wake") begin("dissolve");
-    } else if ((ST.mode === "ember" || ST.mode === "dissolve") && s !== "booting" && M && now > PLAN.closingUntil) {
-      begin("wake");
-      ST.slept = false;
+    if (s === "sleeping") ST.slept = true;
+    if ((s === "sleeping" || !face) && faceOn) begin("dissolve");
+    if ((s === "sleeping" || face) && neuOn) nbegin("dissolve");
+    if (s !== "sleeping" && s !== "booting" && M && now > PLAN.closingUntil) {
+      const tf = (now - ST.t0) / 1000, tn = (now - NS.t0) / 1000;
+      // the next form starts once the other has mostly folded away
+      const neuGone = NS.mode === "ember" || (NS.mode === "dissolve" && tn > N_DIS_S * 0.75);
+      const faceGone = ST.mode === "ember" || (ST.mode === "dissolve" && tf > DIS_S * 0.7);
+      if (face && (ST.mode === "ember" || ST.mode === "dissolve") && neuGone) { begin("wake"); ST.slept = false; }
+      if (!face && faceGone && (NS.mode === "ember" || (NS.mode === "dissolve" && tn > N_DIS_S * 0.9))) { nbegin("assemble"); ST.slept = false; }
     }
   }
-  const t = (now - ST.t0) / 1000;
+  const t = (now - ST.t0) / 1000, tn = (now - NS.t0) / 1000;
   if (ST.mode === "assemble" && t > ASM_S) begin("shown");
   if (ST.mode === "wake" && t > WAKE_S) { begin("shown"); ST.booted = true; }
   if (ST.mode === "dissolve" && t > DIS_S) begin("ember");
+  if (NS.mode === "assemble" && tn > N_ASM_S) { nbegin("shown"); NS.booted = true; }
+  if (NS.mode === "dissolve" && tn > N_DIS_S) nbegin("ember");
   const lvl = s === "speaking" || LIVE.level > 0.03 ? LIVE.level : 0;
   ST.energy += (lvl - ST.energy) * (lvl > ST.energy ? 0.5 : 0.12);
   ST.think += ((s === "thinking" ? 1 : 0) - ST.think) * 0.06;
   ST.wake += ((s === "sleeping" ? 0 : 1) - ST.wake) * 0.02;
-  ST.scene += ((ST.mode === "ember" ? 0.35 : 1) - ST.scene) * 0.02;
+  ST.scene += ((ST.mode === "ember" && NS.mode === "ember" ? 0.35 : 1) - ST.scene) * 0.02;
+}
+function neuronShown(now) {
+  const tn = (now - NS.t0) / 1000;
+  return NS.mode === "shown" ? 1 : NS.mode === "assemble" ? ss((tn - 2.6) / 2.6) : NS.mode === "dissolve" ? 1 - ss(tn / 1.4) : 0;
 }
 
 // HUD furniture around the bust: segmented arcs with degree ticks turning slowly both ways,
@@ -861,6 +1238,106 @@ function drawHud(t, shown, e, th) {
   cx.restore();
 }
 
+/* ----------------------- the network's blocks: names, colours, activity ----------------------- */
+// Each block's neuron lights up while Jarvis uses a tool of that block (tools/_logging.py writes the
+// running tool, hud_panel streams it); the voice block follows his speech, code -- Claude Code.
+const BLOCKS = [
+  { name: "ЯДРО", hue: [1.0, 0.62, 0.25] },
+  { name: "ГОЛОС", hue: [0.35, 0.85, 1.0], re: /voice|music|media|sound|speak|tts/ },
+  { name: "ПАМЯТЬ", hue: [0.72, 0.55, 1.0], re: /memor|remember|forget|fact|todo|remind|timer|note|journal|day_plan|scenario|task|trigger|person|pattern/ },
+  { name: "ЗРЕНИЕ", hue: [0.35, 1.0, 0.78], re: /screen|camera|look|monitor|watch|vision|ocr/ },
+  { name: "СВЯЗЬ", hue: [0.45, 0.68, 1.0], re: /telegram|email|mail|message|contact|whatsapp|chat/ },
+  { name: "СЕТЬ", hue: [0.55, 0.95, 1.0], re: /browser|web|news|search|exchange|weather|briefing|url|site|rate/ },
+  { name: "СИСТЕМА", hue: [1.0, 0.72, 0.38], re: /app|window|file|computer|system|clipboard|smart_home|led|microphone|script|process|power|guard|permission|face|panel|stop/ },
+  { name: "КОД", hue: [1.0, 0.48, 0.85], re: /cod|claude|after_effects|photoshop|premiere|adobe/ },
+];
+const NET = netLayout();
+const NET_CEN = new Float32Array(NET.flat()), NET_HUE = new Float32Array(BLOCKS.map((b) => b.hue).flat());
+const ACT = new Float32Array(8);
+const TOOL = { block: -1, at: 0, done: true, end: 0 };
+function noteTool(t) {
+  const nowS = Date.now() / 1000, name = String(t.tool || "");
+  let block = 0;
+  for (const i of [7, 4, 3, 5, 2, 1, 6]) if (BLOCKS[i].re.test(name)) { block = i; break; }
+  Object.assign(TOOL, { block, at: +t.at || 0, done: !!t.done });
+  TOOL.end = t.done && nowS - TOOL.at < 30 ? nowS : (t.done ? 0 : TOOL.end);
+}
+function updateAct(e, th) {
+  const nowS = Date.now() / 1000;
+  for (let i = 0; i < 8; i++) {
+    let want = 0;
+    if (i === 0) want = th;
+    if (i === 1) want = Math.min(1, e * 1.6);
+    if (i === 7 && CODE.s && CODE.s.active) want = 1;
+    if (TOOL.block === i && (TOOL.done ? nowS - TOOL.end < 3.5 : nowS - TOOL.at < 120)) want = 1;
+    ACT[i] += (want - ACT[i]) * (want > ACT[i] ? 0.15 : 0.03);
+  }
+}
+// the shader's rot(y, p, r) and projection, for the 2D labels and flashes
+function rotN(v, R) {
+  const [y, p, rr] = R;
+  const x1 = v[0] * Math.cos(rr) - v[1] * Math.sin(rr), y1 = v[0] * Math.sin(rr) + v[1] * Math.cos(rr), z1 = v[2];
+  const y2 = y1 * Math.cos(p) - z1 * Math.sin(p), z2 = y1 * Math.sin(p) + z1 * Math.cos(p);
+  return [x1 * Math.cos(y) + z2 * Math.sin(y), y2, -x1 * Math.sin(y) + z2 * Math.cos(y)];
+}
+function projN(pt, R) {
+  const v = rotN([pt[0], pt[1] - 0.35, pt[2] - 0.1], R), qz = v[2] + 0.1, k = 6 / (6 + qz);
+  return [C[0] + v[0] * S * k, C[1] + (v[1] + 0.35) * S * k, qz, k];
+}
+// block names beside their neurons, a leader line, a glow while active; ignition rings in assembly
+function drawNet(now, R, vis) {
+  if (vis < 0.02 && NS.mode !== "assemble") return;
+  const tn = (now - NS.t0) / 1000;
+  const T = NS.mode === "assemble" ? tn : NS.mode === "dissolve" ? N_ASM_S * (1 - tn / N_DIS_S) : NS.mode === "shown" ? 99 : -1;
+  const c0 = projN(NET[0], R);
+  cx.save();
+  cx.globalCompositeOperation = "lighter";
+  const ringAt = (p, t0, size, rgb) => {
+    const dt = T - t0;
+    if (NS.mode !== "assemble" || dt < 0 || dt > 1.0) return;
+    const f = dt / 1.0, rr = size * S * p[3] * (0.15 + 1.2 * ss(f));
+    const g = cx.createRadialGradient(p[0], p[1], 0, p[0], p[1], rr);
+    g.addColorStop(0, `rgba(${rgb}, 0)`); g.addColorStop(0.7, `rgba(${rgb}, ${0.10 * (1 - f)})`); g.addColorStop(1, `rgba(${rgb}, 0)`);
+    cx.fillStyle = g; cx.beginPath(); cx.arc(p[0], p[1], rr, 0, Math.PI * 2); cx.fill();
+    cx.strokeStyle = `rgba(${rgb}, ${0.75 * (1 - f)})`; cx.lineWidth = 0.6 + 2.2 * (1 - f);
+    cx.beginPath(); cx.arc(p[0], p[1], rr, 0, Math.PI * 2); cx.stroke();
+  };
+  // when the bulk of a cell's beads has landed (the shader's start/dur, averaged over the hashes)
+  const landed = (p) => 2.85 + 2.9 * Math.min(1, Math.max(0, ((p[0] - C[0]) / (S * p[3]) + 3.2) / 6.4));
+  ringAt(c0, landed(c0) - 0.3, 1.6, "190, 238, 255");                     // the core ignites
+  cx.font = `600 ${Math.max(12, Math.round(S * 0.06))}px Oxanium, sans-serif`;
+  cx.textBaseline = "middle";
+  try { cx.letterSpacing = "0.14em"; } catch (e) { /* older engines: no tracking */ }
+  for (let i = 1; i < 8; i++) {
+    const p = projN(NET[i], R), b = BLOCKS[i];
+    const rgb = b.hue.map((v) => Math.round(255 * (0.55 + 0.45 * v))).join(", ");
+    const L = landed(p);
+    ringAt(p, L - 0.3, 0.7, rgb);                                           // a block ignites
+    const born = ss((T - L + 0.3) / 0.6) * vis;
+    const depth = 1 - 0.6 * ss((p[2] + 0.4) / 1.6), act = ACT[i];
+    if (act > 0.03 && born > 0.02) {                                      // the active block glows
+      const rr = S * 0.5 * p[3];
+      const g = cx.createRadialGradient(p[0], p[1], 0, p[0], p[1], rr);
+      g.addColorStop(0, `rgba(${rgb}, ${0.28 * act * born * depth})`); g.addColorStop(1, `rgba(${rgb}, 0)`);
+      cx.fillStyle = g; cx.beginPath(); cx.arc(p[0], p[1], rr, 0, Math.PI * 2); cx.fill();
+    }
+    const alpha = born * depth * (0.72 + 0.28 * act);
+    if (alpha < 0.02) continue;
+    let dx = p[0] - c0[0], dy = p[1] - c0[1];
+    const dl = Math.hypot(dx, dy) || 1; dx /= dl; dy /= dl;
+    const r0 = S * 0.24 * p[3], r1 = S * 0.46 * p[3];
+    const lx = p[0] + dx * r1, ly = p[1] + dy * r1 * 0.6 - S * 0.04;
+    cx.strokeStyle = `rgba(${rgb}, ${0.55 * alpha})`; cx.lineWidth = 1.2;
+    cx.beginPath(); cx.moveTo(p[0] + dx * r0, p[1] + dy * r0 * 0.6); cx.lineTo(lx, ly); cx.lineTo(lx + (dx >= 0 ? 1 : -1) * S * 0.08, ly); cx.stroke();
+    cx.textAlign = dx >= 0 ? "left" : "right";
+    cx.fillStyle = `rgba(${rgb}, ${alpha})`;
+    if (act > 0.25) { cx.shadowColor = `rgb(${rgb})`; cx.shadowBlur = 14 * act; }
+    cx.fillText(b.name, lx + (dx >= 0 ? 1 : -1) * S * 0.1, ly);
+    cx.shadowBlur = 0;
+  }
+  cx.restore();
+}
+
 const T0 = performance.now();
 function frame(now) {
   drive(now);
@@ -868,6 +1345,8 @@ function frame(now) {
   const mode = { ember: 3, assemble: 1, shown: 0, dissolve: 2, wake: 4 }[ST.mode];
   const asmT = (now - ST.t0) / 1000;
   const e = ST.energy, th = ST.think;
+  updateAct(e, th);
+  const NROT = [(reduce ? 0 : t * 0.07) + 0.4, 0.2 + (reduce ? 0 : 0.04 * Math.sin(t * 0.5)), reduce ? 0 : 0.02 * Math.sin(t * 0.41 + 0.7)];
 
   // ------- 2D layer: horizon haze, concentric rings, the core glow, the source orb -------
   cx.clearRect(0, 0, W, H);
@@ -878,12 +1357,13 @@ function frame(now) {
   cx.fillStyle = haze; cx.fillRect(0, HOR - 0.5 * S, W, 1.9 * S);
   const shown = ST.mode === "shown" ? 1 : ST.mode === "assemble" ? ss((asmT - 2.4) / 1.8)
     : ST.mode === "wake" ? ss((asmT - 2.4) / 2.2) : ST.mode === "dissolve" ? 1 - ss(asmT / 1.6) : 0;
+  const shownN = neuronShown(now), shownAny = Math.max(shown, shownN);
   const head = [C[0], C[1] - 0.1 * S];
   cx.globalCompositeOperation = "lighter";
   for (let i = 0; i < 9; i++) {
     const phase = (t * 0.08 + i / 9) % 1;
     const r = S * (1.3 + i * 0.13 + (reduce ? 0 : 0.02 * Math.sin(t * 1.3 + i))) * (1 + e * 0.04 * Math.sin(t * 8 - i));
-    cx.strokeStyle = `rgba(111, 216, 255, ${(0.09 + 0.05 * Math.sin(phase * Math.PI * 2) + 0.12 * e) * shown * (1 - i / 11)})`;
+    cx.strokeStyle = `rgba(111, 216, 255, ${(0.09 + 0.05 * Math.sin(phase * Math.PI * 2) + 0.12 * e) * shownAny * (1 - i / 11)})`;
     cx.lineWidth = 1;
     cx.beginPath(); cx.arc(head[0], head[1], r, 0, Math.PI * 2); cx.stroke();
   }
@@ -896,20 +1376,32 @@ function frame(now) {
     cx.fillStyle = gcore;
     cx.beginPath(); cx.ellipse(C[0], gy, rc * 0.85, rc * 1.1, 0, 0, Math.PI * 2); cx.fill();
   }
-  drawHud(t, shown, e, th);
+  if (shownN > 0.01) {                    // the neuron's body glows from within
+    const rn = S * (0.62 + 0.22 * e), gy = C[1] + 0.02 * S;
+    const gn = cx.createRadialGradient(C[0], gy, 0, C[0], gy, rn);
+    const hot = Math.min(1, 0.2 + e * 1.6);
+    gn.addColorStop(0, th > 0.5 ? `rgba(200, 240, 255, ${0.22 * shownN})` : `rgba(255, ${Math.round(160 + 70 * hot)}, 90, ${(0.12 + 0.26 * hot) * shownN})`);
+    gn.addColorStop(0.45, `rgba(60, 150, 255, ${0.06 * shownN})`);
+    gn.addColorStop(1, "rgba(20, 90, 255, 0)");
+    cx.fillStyle = gn;
+    cx.beginPath(); cx.arc(C[0], gy, rn, 0, Math.PI * 2); cx.fill();
+  }
+  drawHud(t, shownAny, e, th);
+  drawNet(now, NROT, shownN);
   const orbA = ST.mode === "wake" ? (0.8 + 0.2 * ss(asmT / 0.8)) * (1 - ss((asmT - 1.6) / 1.6))
              : ST.mode === "ember" ? 0.75 + 0.25 * Math.sin(t * (ST.wake < 0.5 ? 1.6 : 3.0))
              : ST.mode === "assemble" ? 1 - ss((asmT - 3.3) / 1.0) : ST.mode === "dissolve" ? 0.2 + 0.6 * ss((asmT - 0.8) / 2.0) : 0;
-  if (orbA > 0.01) {
+  const oa = orbA * (1 - shownN);
+  if (oa > 0.01) {
     const r = S * 0.12 * (1 + 0.08 * Math.sin(t * 6)) * (ST.mode === "wake" ? 1 + 0.5 * ss(asmT / 1.2) : 1);
     const go = cx.createRadialGradient(ORB[0], ORB[1], 0, ORB[0], ORB[1], r * 4);
-    go.addColorStop(0, `rgba(255, 255, 255, ${orbA})`);
-    go.addColorStop(0.1, `rgba(170, 230, 255, ${orbA})`);
-    go.addColorStop(0.3, `rgba(60, 150, 255, ${0.45 * orbA})`);
+    go.addColorStop(0, `rgba(255, 255, 255, ${oa})`);
+    go.addColorStop(0.1, `rgba(170, 230, 255, ${oa})`);
+    go.addColorStop(0.3, `rgba(60, 150, 255, ${0.45 * oa})`);
     go.addColorStop(1, "rgba(20, 90, 255, 0)");
     cx.fillStyle = go;
     cx.beginPath(); cx.arc(ORB[0], ORB[1], r * 4, 0, Math.PI * 2); cx.fill();
-    cx.strokeStyle = `rgba(170, 230, 255, ${0.35 * orbA})`;
+    cx.strokeStyle = `rgba(170, 230, 255, ${0.35 * oa})`;
     cx.beginPath(); cx.arc(ORB[0], ORB[1], r * (1.6 + 0.3 * Math.sin(t * 3)), 0, Math.PI * 2); cx.stroke();
   }
   cx.globalCompositeOperation = "source-over";
@@ -925,6 +1417,10 @@ function frame(now) {
     gl.uniform1f(U.uTh, th); gl.uniform1f(U.uYaw, yaw); gl.uniform1f(U.uPitch, pitch); gl.uniform1f(U.uRoll, roll);
     gl.uniform1f(U.uAsmT, asmT); gl.uniform1f(U.uMode, mode); gl.uniform1f(U.uScene, ST.scene);
     gl.uniform1f(U.uBead, Math.max(1.6, M.prm.front * S * 0.95));
+    gl.uniform1f(U.uN, { shown: 0, assemble: 1, dissolve: 2, ember: 3 }[NS.mode]);
+    gl.uniform1f(U.uNT, (now - NS.t0) / 1000);
+    gl.uniform3fv(U.uCen, NET_CEN); gl.uniform3fv(U.uHue, NET_HUE); gl.uniform1fv(U.uAct, ACT);
+    gl.uniform3f(U.uNRot, NROT[0], NROT[1], NROT[2]);
     const bustOn = mode !== 3;
     gl.enable(gl.DEPTH_TEST);
     if (bustOn) {                                         // occluder into the depth buffer only
@@ -940,29 +1436,39 @@ function frame(now) {
       gl.uniform1f(U.uPass, 1); gl.drawArrays(gl.POINTS, 0, M.nBust);   // glow + trails
       gl.uniform1f(U.uPass, 0); gl.drawArrays(gl.POINTS, 0, M.nBust);   // crisp orbs
       if (mode === 1 || mode === 2 || mode === 4) {                      // the dense stream / the burst
-        gl.uniform1f(U.uPass, 1); gl.drawArrays(gl.POINTS, M.nFly0, M.n - M.nFly0);
-        gl.uniform1f(U.uPass, 0); gl.drawArrays(gl.POINTS, M.nFly0, M.n - M.nFly0);
+        gl.uniform1f(U.uPass, 1); gl.drawArrays(gl.POINTS, M.nFly0, M.nNeu0 - M.nFly0);
+        gl.uniform1f(U.uPass, 0); gl.drawArrays(gl.POINTS, M.nFly0, M.nNeu0 - M.nFly0);
+      }
+    }
+    if (NS.mode !== "ember") {                            // the neuron
+      gl.uniform1f(U.uGhost, 0);
+      gl.uniform1f(U.uPass, 1); gl.drawArrays(gl.POINTS, M.nNeu0, M.n - M.nNeu0);
+      gl.uniform1f(U.uPass, 0); gl.drawArrays(gl.POINTS, M.nNeu0, M.n - M.nNeu0);
+      if (NS.mode === "assemble" || NS.mode === "dissolve") {   // the river: extra mist passes
+        for (let g = 1; g <= 3; g++) { gl.uniform1f(U.uGhost, g); gl.drawArrays(gl.POINTS, M.nNeu0, M.n - M.nNeu0); }
+        gl.uniform1f(U.uGhost, 0);
       }
     }
   }
 
   // ------- labels -------
   const label = ST.mode === "assemble" ? `ASSEMBLING… ${Math.min(100, Math.round(asmT / (ASM_S - 0.4) * 100))}%`
-    : ST.mode === "wake" ? (ST.booted ? "REACTIVATING…" : "INITIALIZING…")
+    : ST.mode === "wake" ? (ST.booted || NS.booted ? "FACE LINK…" : "INITIALIZING…")
+    : NS.mode === "assemble" ? `NEURAL LINK… ${Math.min(100, Math.round((now - NS.t0) / 1000 / (N_ASM_S - 0.4) * 100))}%`
     : LIVE.muted ? "MIC OFF · F9"
     : LIVE.status === "sleeping" ? "STANDBY · F10 / HEY JARVIS"
-    : ST.mode === "ember" || ST.mode === "dissolve" ? "STATUS: STANDBY"
+    : (ST.mode === "ember" || ST.mode === "dissolve") && NS.mode !== "shown" ? "STATUS: STANDBY"
     : `STATUS: ${({ thinking: "THINKING", speaking: "SPEAKING" }[LIVE.status] || (e > 0.05 ? "SPEAKING" : "LISTENING"))}`;
   const st = $("status");
   if (st.dataset.t !== label + LIVE.watching) {
     st.dataset.t = label + LIVE.watching;
     st.innerHTML = esc(label) + (LIVE.watching ? '<span class="rec" title="Джарвис следит за экраном"></span>' : "");
   }
-  st.style.opacity = ST.mode === "ember" ? 0.5 : 0.85;
+  st.style.opacity = ST.mode === "ember" && NS.mode === "ember" ? 0.5 : 0.85;
   if (LIVE.linesAt && now - LIVE.linesAt > 15000 && LIVE.status !== "speaking") $("subs").style.opacity = 0;
   renderTele();
   const teleA = ST.mode === "shown" ? 1 : ST.mode === "assemble" ? ss((asmT - 2.4) / 1.5)
-    : ST.mode === "wake" ? ss((asmT - 3.0) / 1.6) : 0.25;
+    : ST.mode === "wake" ? ss((asmT - 3.0) / 1.6) : Math.max(0.25, shownN);
   $("teleL").style.opacity = $("teleR").style.opacity = teleA;
   requestAnimationFrame(frame);
 }

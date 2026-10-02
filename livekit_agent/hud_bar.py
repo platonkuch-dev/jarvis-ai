@@ -210,6 +210,7 @@ def _panel_link(head) -> list:
 
     hud_panel.serve(level_fn=lambda: (getattr(head, "_level", 0.0), getattr(head, "_sib", 0.0)))
     hud_panel.set_plan(False)       # a fresh launch shows just Jarvis; "открой план" unfolds the plan
+    hud_panel.set_face(False)       # ...as the neuron; "покажи лицо" swaps in the face
 
     def open_on_second_monitor() -> None:
         try:

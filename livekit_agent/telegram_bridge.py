@@ -207,6 +207,7 @@ async def _handle_message(event) -> None:
 
     turns = _histories.get(chat_id, [])
     flat_history = _flatten(turns)
+    started = time.time()
     try:
         reply_text, updated_history = await _run_turn(
             system_text=system_text, tools_param=tools_param, history=flat_history, user_text=text,
@@ -222,6 +223,9 @@ async def _handle_message(event) -> None:
     _histories[chat_id] = turns[-config.TELEGRAM_BRIDGE_MAX_HISTORY:]
     await _save_histories()
     await event.reply(reply_text)
+    logger.info("replied to %s: message reached us %.0fs after sending, reply took %.1fs",
+                "owner" if is_owner else sender_id, started - event.message.date.timestamp(),
+                time.time() - started)
 
 
 async def main() -> None:
@@ -275,7 +279,26 @@ async def main() -> None:
 
     me = await client.get_me()
     logger.info("Telegram bridge listening as %s (%s)", me.first_name, me.phone)
-    await client.run_until_disconnected()
+    poller = asyncio.create_task(_catch_up_loop(client))
+    try:
+        await client.run_until_disconnected()
+    finally:
+        poller.cancel()
+
+
+async def _catch_up_loop(client: TelegramClient) -> None:
+    """The monitor and the chat archiver run on byte copies of this account's
+    session -- one auth key, several connections -- and Telegram pushes a new
+    message to just one of them. Unless it lands here, telethon only noticed
+    it on its 15-minute idle getDifference: replies came 6-11 minutes late.
+    A cheap getDifference every few seconds picks up whatever went elsewhere
+    (telethon tracks pts, so nothing is handled twice)."""
+    while True:
+        await asyncio.sleep(config.TELEGRAM_BRIDGE_CATCH_UP_S)
+        try:
+            await client.catch_up()
+        except Exception:
+            logger.debug("catch_up failed", exc_info=True)
 
 
 if __name__ == "__main__":

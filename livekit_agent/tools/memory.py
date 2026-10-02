@@ -245,8 +245,10 @@ def format_memory_for_prompt(memory: dict | None) -> str:
 
     header = "[ЧТО ТЫ ЗНАЕШЬ ОБ ЭТОМ ЧЕЛОВЕКЕ — используй естественно, никогда не зачитывай как список]\n"
     result = header + "\n".join(lines)
-    if len(result) > 2000:
-        result = result[:1997] + "…"
+    # The store itself is capped at MEMORY_MAX_CHARS; the rendered block (no
+    # JSON quoting/dates) is shorter, so this only guards against runaway values.
+    if len(result) > config.MEMORY_MAX_CHARS:
+        result = result[: config.MEMORY_MAX_CHARS - 1] + "…"
     return result + "\n"
 
 

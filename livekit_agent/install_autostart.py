@@ -1,18 +1,14 @@
-"""Install or remove the Jarvis voice agent from the current user's Windows startup.
+r"""Install or remove the Jarvis voice agent from the current user's Windows startup.
 
-Drops a native .lnk shortcut into the Startup folder (no registry edits) that
-launches app.py via the project's own venv pythonw.exe.
+Registers app.py (via the project's own venv pythonw.exe) under
+HKCU\Software\Microsoft\Windows\CurrentVersion\Run.
 
-A .lnk was chosen over a .bat deliberately: a shortcut's target path is
-stored as Unicode COM metadata, never parsed as text by any shell. A .bat
-file containing this project's own Cyrillic path as literal text (the
-previous approach here) gets silently mangled by cmd.exe reading the script
-under the system's default OEM codepage at real Windows startup -- verified
-live: it worked every time *I* tested it (through shells that already
-tolerate UTF-8), but failed for the user at an actual login with a "cannot
-find <mangled path>" error, since a genuine boot-time cmd.exe uses the
-OS locale's OEM codepage instead. Windows Explorer's own Desktop shortcuts
-(see scripts/create_shortcut.ps1) never hit this, which is what gave it away.
+History: a .bat in the Startup folder broke at real logins (cmd.exe reads the
+script in the OEM codepage and mangles this project's Cyrillic path). The .lnk
+that replaced it avoided that, but Explorer's Startup-folder pass proved
+unreliable at boot (2026-10-01: Run keys executed at 08:57, the Startup folder
+was never enumerated). A Run value is a Unicode REG_SZ handed straight to
+CreateProcess -- no shell text parsing, no Startup-folder delay.
 
 Usage:
     python install_autostart.py            # install
@@ -22,12 +18,17 @@ Usage:
 from __future__ import annotations
 
 import sys
+import winreg
 from pathlib import Path
 
 BASE_DIR = Path(__file__).resolve().parent
 STARTUP_DIR = Path.home() / "AppData" / "Roaming" / "Microsoft" / "Windows" / "Start Menu" / "Programs" / "Startup"
-LNK_PATH = STARTUP_DIR / "Jarvis Voice Agent.lnk"
-BAT_PATH = STARTUP_DIR / "JarvisVoiceAgent.bat"  # previous, broken approach -- cleaned up if present
+LEGACY_FILES = (STARTUP_DIR / "Jarvis Voice Agent.lnk", STARTUP_DIR / "JarvisVoiceAgent.bat")  # cleaned up if present
+RUN_KEY = r"Software\Microsoft\Windows\CurrentVersion\Run"
+APPROVED_KEY = r"Software\Microsoft\Windows\CurrentVersion\Explorer\StartupApproved\Run"
+VALUE_NAME = "JarvisVoiceAgent"
+
+
 def _pythonw() -> Path:
     venv = BASE_DIR / ".venv" / "Scripts" / "pythonw.exe"
     sibling = Path(sys.executable).with_name("pythonw.exe")  # installed layout: runtime\pythonw.exe
@@ -36,7 +37,24 @@ def _pythonw() -> Path:
 
 PYTHONW = _pythonw()
 APP_PY = BASE_DIR / "app.py"
-ICON_PATH = BASE_DIR / "assets" / "jarvis.ico"
+
+
+def _clear_approval() -> None:
+    # Windows remembers a Task Manager "disable" per value name; drop any stale verdict.
+    try:
+        with winreg.OpenKey(winreg.HKEY_CURRENT_USER, APPROVED_KEY, 0, winreg.KEY_SET_VALUE) as key:
+            winreg.DeleteValue(key, VALUE_NAME)
+    except FileNotFoundError:
+        pass
+
+
+def _remove_legacy() -> bool:
+    removed = False
+    for path in LEGACY_FILES:
+        if path.exists():
+            path.unlink()
+            removed = True
+    return removed
 
 
 def install() -> None:
@@ -44,38 +62,26 @@ def install() -> None:
         print(f"Не найден {PYTHONW}. Сначала создайте venv и установите зависимости (см. README.md).")
         return
 
-    import win32com.client
+    command = f'"{PYTHONW}" "{APP_PY}"'
+    with winreg.CreateKey(winreg.HKEY_CURRENT_USER, RUN_KEY) as key:
+        winreg.SetValueEx(key, VALUE_NAME, 0, winreg.REG_SZ, command)
+    _clear_approval()
+    _remove_legacy()
 
-    STARTUP_DIR.mkdir(parents=True, exist_ok=True)
-    if BAT_PATH.exists():
-        BAT_PATH.unlink()
-
-    shell = win32com.client.Dispatch("WScript.Shell")
-    shortcut = shell.CreateShortCut(str(LNK_PATH))
-    shortcut.TargetPath = str(PYTHONW)
-    shortcut.Arguments = f'"{APP_PY}"'
-    shortcut.WorkingDirectory = str(BASE_DIR)
-    if ICON_PATH.exists():
-        shortcut.IconLocation = f"{ICON_PATH},0"
-    shortcut.Description = "Запустить голосового ассистента Джарвис при входе в Windows"
-    shortcut.Save()
-
-    print(f"Автозапуск установлен: {LNK_PATH}")
+    print(f"Автозапуск установлен: HKCU\\{RUN_KEY}\\{VALUE_NAME}")
     print("Джарвис будет запускаться при входе в Windows (иконка в трее).")
 
 
 def uninstall() -> None:
-    removed = False
-    if LNK_PATH.exists():
-        LNK_PATH.unlink()
+    removed = _remove_legacy()
+    try:
+        with winreg.OpenKey(winreg.HKEY_CURRENT_USER, RUN_KEY, 0, winreg.KEY_SET_VALUE) as key:
+            winreg.DeleteValue(key, VALUE_NAME)
         removed = True
-    if BAT_PATH.exists():
-        BAT_PATH.unlink()
-        removed = True
-    if removed:
-        print("Автозапуск отключён.")
-    else:
-        print("Автозапуск не был установлен -- нечего удалять.")
+    except FileNotFoundError:
+        pass
+    _clear_approval()
+    print("Автозапуск отключён." if removed else "Автозапуск не был установлен -- нечего удалять.")
 
 
 if __name__ == "__main__":

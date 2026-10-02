@@ -33,6 +33,7 @@ from livekit.plugins import anthropic, deepgram, elevenlabs, openai as openai_pl
 import config
 import fast_path
 import hud_bridge
+import journal
 import memes
 import notify
 import pc_guard
@@ -300,7 +301,13 @@ async def entrypoint(ctx: JobContext) -> None:
     if restricted:
         agent = JarvisAgent(prompts.SYSTEM_PROMPT + _RESTRICTED_CALLER_NOTE, restricted=True)
     else:
-        agent = JarvisAgent(prompts.build_instructions(await load_memory()))
+        owner_memory = await load_memory()
+        agent = JarvisAgent(prompts.build_instructions(owner_memory))
+    # Only the owner's own desktop session goes into the shared journal
+    # (journal.py) -- phone callers are not the owner.
+    journal_owner = None
+    if IS_CONSOLE_MODE and not restricted:
+        journal_owner = ((owner_memory.get("identity") or {}).get("name") or {}).get("value") or "Владелец"
 
     mcp_server = None
     session_kwargs = {}
@@ -373,7 +380,12 @@ async def entrypoint(ctx: JobContext) -> None:
         if not text:
             return
         hud_lines.append({"role": role, "text": text})
-        if role == "user":
+        if journal_owner is not None and role in ("user", "assistant"):
+            if role == "user":
+                journal.append("voice", "", journal_owner, "owner", text)
+            else:
+                journal.append("voice", "", "Джарвис", "jarvis", text)
+        if role == "user" and (sleep_wake is None or not sleep_wake.asleep):
             hud_bridge.write_state("thinking", hud_lines)
 
     if IS_CONSOLE_MODE:
@@ -389,13 +401,14 @@ async def entrypoint(ctx: JobContext) -> None:
         def _on_playback_started(ev) -> None:
             if sleep_wake is not None:
                 sleep_wake.note_activity()
-            hud_bridge.write_state("speaking", hud_lines)
+            hud_bridge.write_state("sleeping" if sleep_wake is not None and sleep_wake.asleep else "speaking", hud_lines)
 
         @session.output.audio.on("playback_finished")
         def _on_playback_finished(ev) -> None:
             if sleep_wake is not None:
                 sleep_wake.note_activity()
-            hud_bridge.write_state("listening", hud_lines)
+            # an F10 interrupt ends playback after the HUD already went to sleep: keep it asleep
+            hud_bridge.write_state("sleeping" if sleep_wake is not None and sleep_wake.asleep else "listening", hud_lines)
 
     # Lets background tasks (reminders, timers, scenario narration/progress)
     # speak and publish into this room without needing a RunContext of their own.

@@ -29,8 +29,8 @@ _SAFE_TOOLS = {
     "media_control", "find_and_open_file", "change_voice", "look_at_camera",
     "watch_screen", "stop_watching_screen", "stop_computer_use", "list_tasks", "task_status",
     "list_triggers", "get_news", "morning_briefing", "exchange_rate", "play_music", "check_email",
-    "list_reminders", "cancel_reminder", "write_clipboard",
-    "show_day_plan", "close_day_plan", "close_hud_panel", "open_hud_panel", "set_microphone", "look_at_screen", "list_monitors",
+    "list_reminders", "cancel_reminder", "write_clipboard", "telegram_chats",
+    "show_day_plan", "close_day_plan", "show_face", "hide_face", "close_hud_panel", "open_hud_panel", "set_microphone", "look_at_screen", "list_monitors",
 }
 _CONFIRM_TOOLS = {
     "send_telegram_message", "remember_person_fact", "close_application", "use_computer",
@@ -57,6 +57,7 @@ _ACTION_LEVELS: dict[str, dict[str, str]] = {
                      "disk_usage": SAFE, "create_folder": SAFE},
     "quick_ui": {"read": SAFE},
     "ui_automation": {"find": SAFE, "read": SAFE, "get_tree": SAFE, "wait_for_element": SAFE},
+    "coding_agent": {"open": SAFE, "stop": SAFE, "start": CONFIRM},
 }
 
 

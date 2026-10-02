@@ -48,6 +48,7 @@ _TOP = 22.0                     # screen y of model y = -1.3 (top of the head)
 _CAM_D = 6.0                    # camera distance (perspective strength)
 ORB = np.array([WIN_W / 2, WIN_H - 22.0], dtype=np.float32)
 _TICK_MS = 16
+_IDLE_TICK_MS = 66   # ~15 fps once he has settled into the sleeping orb
 _AUDIO_LATENCY_S = 0.07
 
 CYAN = np.array([0.12, 0.55, 1.00], dtype=np.float32)
@@ -76,16 +77,19 @@ def _g(v, m, s):
 
 def _features(u, y):
     """Forward offset of the face surface (model units) at lateral u (-1..1) and height y."""
-    brow = 0.10 * _g(y, -0.30, 0.08) * _g(u, 0.0, 0.55)
+    brow = 0.12 * _g(y, -0.30, 0.09) * _g(u, 0.0, 0.55)
     sockets = -0.14 * (_g(u, -0.36, 0.13) + _g(u, 0.36, 0.13)) * _g(y, -0.12, 0.09)
-    nose_prof = (0.06 + 0.30 * _ss((y + 0.22) / 0.5)) * (1 - _ss((y - 0.30) / 0.07)) * (y > -0.32)
-    nose = nose_prof * _g(u, 0.0, 0.085 + 0.05 * _ss((y - 0.10) / 0.2))
-    wings = 0.05 * (_g(u, -0.12, 0.05) + _g(u, 0.12, 0.05)) * _g(y, 0.29, 0.05)
-    cheeks = 0.07 * (_g(u, -0.55, 0.2) + _g(u, 0.55, 0.2)) * _g(y, 0.08, 0.14)
+    # nose: a gentle bridge off the brow rising to a rounded tip -- kept in
+    # proportion with the other features (brow/cheeks/chin) so it reads as a
+    # soft ridge rather than a jutting spike.
+    nose_prof = 0.15 * _ss((y + 0.26) / 0.30) * (1 - _ss((y - 0.16) / 0.24)) * (y > -0.30)
+    nose = nose_prof * _g(u, 0.0, 0.12 + 0.05 * _ss(y / 0.3))
+    wings = 0.045 * (_g(u, -0.12, 0.06) + _g(u, 0.12, 0.06)) * _g(y, 0.27, 0.06)
+    cheeks = 0.09 * (_g(u, -0.55, 0.2) + _g(u, 0.55, 0.2)) * _g(y, 0.08, 0.14)
     upper_lip = 0.11 * _g(u, 0.0, 0.21) * _g(y, 0.52, 0.05)
     lower_lip = 0.10 * _g(u, 0.0, 0.19) * _g(y, 0.665, 0.055)
     groove = -0.06 * _g(u, 0.0, 0.23) * _g(y, 0.59, 0.02)
-    chin = 0.10 * _g(u, 0.0, 0.26) * _g(y, 0.98, 0.13)
+    chin = 0.12 * _g(u, 0.0, 0.26) * _g(y, 0.98, 0.13)
     return brow + sockets + nose + wings + cheeks + upper_lip + lower_lip + groove + chin
 
 
@@ -141,7 +145,15 @@ class _Model:
         for i, y0 in enumerate(np.arange(-1.26, 1.29, 0.052)):
             x0, _, z0 = _head_surface(np.array([math.pi / 2]), y0)
             rx = max(abs(float(x0[0])), 0.05)
-            front = np.arange(-math.pi / 2, math.pi / 2, 0.034 / rx)
+            # Front sampled uniformly in the lateral coordinate u = sin(phi), not
+            # in phi itself: with x = rx*sin(phi), equal angular steps bunch
+            # points up near the profile (phi -> +-pi/2) and go sparse right at
+            # phi = 0 -- the dead center of the face, and also its
+            # closest-to-camera point, so perspective magnifies that gap too.
+            # That showed up as a vertical seam straight down the middle of
+            # the face. Stepping u instead keeps the on-surface spacing even.
+            u = np.arange(-1.0, 1.0, 0.034 / rx)
+            front = np.arcsin(np.clip(u, -1.0, 1.0))
             back = np.arange(math.pi / 2, 3 * math.pi / 2, 0.075 / rx)
             phi = np.concatenate([front, back])
             x, y, z = _head_surface(phi, y0)
@@ -340,6 +352,8 @@ class HeadPanel(QWidget):
             return
         was = self._status
         self._status = status
+        if status != "sleeping" and self._timer.interval() != _TICK_MS:
+            self._timer.setInterval(_TICK_MS)       # wake: full frame rate right away
         if status == "sleeping" and self._mode in ("shown", "assemble"):
             self._begin("dissolve")
         elif status != "sleeping" and was == "sleeping" and self._mode in ("orb", "dissolve"):
@@ -383,10 +397,11 @@ class HeadPanel(QWidget):
         # out of it (waking up reads better snappy) -- and it scales _t itself,
         # so every sine-driven motion (breathing, head sway, scan wave, sparks)
         # visibly slows down as he settles instead of freezing and cutting out.
+        ticks = self._timer.interval() / _TICK_MS   # >1 at the idle frame rate
         settle_target = 1.0 if self._status == "sleeping" else 0.0
         rate = 0.016 if settle_target > self._settle else 0.06
-        self._settle += (settle_target - self._settle) * rate
-        self._t += (_TICK_MS / 1000) * (1.0 - 0.6 * self._settle)
+        self._settle += (settle_target - self._settle) * (1 - (1 - rate) ** ticks)
+        self._t += (_TICK_MS / 1000) * ticks * (1.0 - 0.6 * self._settle)
         talking = self._status == "speaking" or (now - self._last_audio) < 0.4
         lvl = self._level if talking else 0.0
         self._open += (lvl - self._open) * (0.55 if lvl > self._open else 0.3)
@@ -396,8 +411,14 @@ class HeadPanel(QWidget):
         self._think += ((1.0 if self._status == "thinking" else 0.0) - self._think) * 0.06
         self._talking = talking
         self._step_blink(now)
-        self._step_fx(now)
+        self._step_fx(now, ticks)
         self.update()
+        # Asleep and fully settled into the orb: nothing moves fast, so drop to
+        # the idle frame rate instead of redrawing 60 times a second.
+        idle = self._status == "sleeping" and self._mode == "orb" and self._settle > 0.97
+        want = _IDLE_TICK_MS if idle else _TICK_MS
+        if self._timer.interval() != want:
+            self._timer.setInterval(want)
 
     def _step_blink(self, now: float) -> None:
         if self._blink_start is None and now >= self._next_blink:
@@ -509,14 +530,14 @@ class HeadPanel(QWidget):
             self._order = np.clip(s / 256.0, 0, 1).astype(np.float32)
         return self._order
 
-    def _step_fx(self, now: float) -> None:
+    def _step_fx(self, now: float, ticks: float = 1.0) -> None:
         t = now - self._mode_t0
         if self._mode == "orb":
             target = 0.55 + 0.45 * (0.5 + 0.5 * math.sin(self._t * (1.6 if self._status == "sleeping" else 3.0)))
             # Eased rather than assigned outright: whatever _orb was doing in
             # the mode we just left (mid-flash from "assemble", mid-fade from
             # "dissolve"), it glides onto this pulse instead of popping onto it.
-            self._orb += (target - self._orb) * 0.05
+            self._orb += (target - self._orb) * (1 - 0.95 ** ticks)
             self._fx = None
             self._progress = 0.0
             return

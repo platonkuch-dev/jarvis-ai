@@ -48,6 +48,17 @@ APPROVED_TTL_S = 120.0  # how long after "да" the model has to repeat the call
 
 _SHELL_TOOLS = {"PowerShell", "Bash"}
 _WRITE_TOOLS = {"Write", "Edit", "MultiEdit", "NotebookEdit"}
+
+# Programming is coding_agent's job -- it runs on the hologram, where the
+# owner watches it. The brain writing source files itself would bypass that,
+# so writes to code files are turned back with a pointer to coding_agent.
+# PC scripts (.ps1/.bat/.cmd) stay the brain's own, and so do its skills'
+# scratch areas (its workspace, temp), where e.g. the docx skill writes helpers.
+CODE_REASON = "код пишет только coding_agent"
+_CODE_EXT_RE = re.compile(
+    r"\.(py|pyw|js|mjs|cjs|ts|tsx|jsx|vue|svelte|html?|css|scss|sass|less|java|kt|kts|cs|cpp|cc|cxx|c|h|hpp|"
+    r"go|rs|php|rb|swift|dart|lua|r|scala|sql|sh|zsh|ipynb|gd|gdscript)$", re.IGNORECASE)
+_CODE_SCRATCH_RE = re.compile(r"claude_workspace|[\\/](temp|tmp)[\\/]|appdata[\\/]local[\\/]temp", re.IGNORECASE)
 # Input fields that don't change what a call does (the model rewords them on a retry).
 _IGNORED_FIELDS = {"description", "timeout", "run_in_background"}
 
@@ -246,6 +257,8 @@ def classify(tool_name: str, tool_input: dict | None) -> tuple[str, str]:
             return CONFIRM, "изменение файла в системной папке"
         if _SENSITIVE_WRITE_RE.search(path):
             return CONFIRM, "запись в автозагрузку, профиль PowerShell или ключи SSH"
+        if _CODE_EXT_RE.search(path) and not _CODE_SCRATCH_RE.search(path):
+            return BLOCK, CODE_REASON
         return ALLOW, ""
     return ALLOW, ""
 
@@ -318,6 +331,12 @@ def confirm_message(reason: str) -> str:
 
 
 def block_message(reason: str) -> str:
+    if reason == CODE_REASON:
+        return (
+            "НЕ ПИШИ КОД САМ: программирование идёт только через mcp__jarvis__coding_agent "
+            "(action=\"start\", project — папка проекта или короткое имя нового, task — техзадание), "
+            "его ход пользователь смотрит на голограмме. Вызови coding_agent с этой задачей."
+        )
     return (
         f"ЗАПРЕЩЕНО ({reason}): это может сломать Windows, такое не выполняется даже с подтверждением. "
         "Не пытайся обойти запрет. Скажи пользователю, что это можно сделать только вручную."

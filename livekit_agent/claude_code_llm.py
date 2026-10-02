@@ -64,6 +64,10 @@ CLAUDE_CODE_NOTE = """
   пользователь подтвердил, — повтори ту же команду слово в слово. Если опасных шагов
   несколько, собери их в одну команду, чтобы спросить один раз. Действия с пометкой
   «ЗАПРЕЩЕНО» не выполняются никогда.
+- ПРОГРАММИРОВАНИЕ — только mcp__jarvis__coding_agent (action="start"): любой код, скрипты,
+  боты, сайты, правки и баги в проектах. Сам код не пиши — ни Write/Edit файлов с кодом, ни
+  PowerShell — и не запускай claude в консоли: работа должна идти на голограмме, а она
+  показывает только coding_agent. Для нового проекта дай короткое имя папки — создастся сама.
 - Документы Word, таблицы Excel, презентации, PDF, разбор папок, скачивание видео — делай
   САМ через свои скиллы (docx, xlsx, pptx, pdf, file-organizer, video-downloader), готовые
   файлы сохраняй в папку «Документы» пользователя, если он не сказал другое. НЕ отдавай это
@@ -78,6 +82,18 @@ _MD_CHARS = re.compile(r"[*`#]")
 _WS = re.compile(r"\s+")
 
 
+def _owner_prompt_from_memory() -> str | None:
+    try:
+        import prompts
+        from tools.memory import _normalize
+
+        memory = _normalize(json.loads(config.MEMORY_FILE.read_text(encoding="utf-8")))
+        return prompts.build_instructions(memory)
+    except Exception:
+        logger.exception("could not rebuild the prompt from memory; keeping the previous one")
+        return None
+
+
 def _norm(text: str) -> str:
     return _WS.sub(" ", _MD_CHARS.sub("", text)).strip().lower()
 
@@ -86,9 +102,11 @@ class _ClaudeProcess:
     """The long-lived `claude` subprocess and its stdout event queue."""
 
     def __init__(
-        self, system_prompt: str, mcp_config: dict[str, Any] | None, *, restricted: bool, persist: bool
+        self, system_prompt: str, mcp_config: dict[str, Any] | None, *, restricted: bool, persist: bool,
+        note: str = "",
     ) -> None:
-        self._system_prompt = system_prompt
+        self._system_prompt = system_prompt + note
+        self._note = note
         self._mcp_config = mcp_config
         # restricted: an untrusted phone caller -- no tools at all.
         self._restricted = restricted
@@ -100,6 +118,9 @@ class _ClaudeProcess:
         self._events: asyncio.Queue[dict[str, Any] | None] = asyncio.Queue()
         self._readers: list[asyncio.Task] = []
         self.resuming = False
+        # Prompt size of the last API call, from the turn's usage; past
+        # CLAUDE_CODE_MAX_CONTEXT_TOKENS the session is replaced (see rotate).
+        self.context_tokens = 0
         self.lock = asyncio.Lock()
         self.session_id: str | None = (
             _load_session_id() if config.CLAUDE_CODE_RESUME and self._persist else None
@@ -115,10 +136,18 @@ class _ClaudeProcess:
         await self.stop()
         if fresh:
             self.session_id = None
+        self.context_tokens = 0
         exe = shutil.which("claude")
         if exe is None:
             raise APIConnectionError("claude CLI не найден в PATH", retryable=False)
 
+        if self._persist:
+            # The owner's prompt is rebuilt from memory.json on every start
+            # (launch, wake from sleep), so facts saved meanwhile -- by
+            # remember_fact, Telegram or memory_sync.py -- reach the brain.
+            rebuilt = _owner_prompt_from_memory()
+            if rebuilt:
+                self._system_prompt = rebuilt + self._note
         workdir = config.CLAUDE_CODE_WORKDIR
         workdir.mkdir(parents=True, exist_ok=True)
         _install_skills(workdir)
@@ -208,6 +237,12 @@ class _ClaudeProcess:
             except ValueError:
                 logger.debug("claude non-json: %s", line[:200])
                 continue
+            if event.get("type") == "assistant":
+                usage = (event.get("message") or {}).get("usage") or {}
+                size = sum(int(usage.get(k) or 0) for k in
+                           ("input_tokens", "cache_read_input_tokens", "cache_creation_input_tokens"))
+                if size:
+                    self.context_tokens = size
             if event.get("type") == "system" and event.get("subtype") == "init":
                 sid = event.get("session_id")
                 if sid and sid != self.session_id:
@@ -261,7 +296,7 @@ class ClaudeCodeLLM(llm.LLM):
     ) -> None:
         super().__init__()
         note = "" if restricted else CLAUDE_CODE_NOTE
-        self._proc = _ClaudeProcess(system_prompt + note, mcp_config, restricted=restricted, persist=persist_session)
+        self._proc = _ClaudeProcess(system_prompt, mcp_config, restricted=restricted, persist=persist_session, note=note)
         self._forwarded: set[str] = set()
         # Our own recent replies, to tell them apart from assistant messages
         # LiveKit added without us (fast path, reminders, session.say).
@@ -316,6 +351,41 @@ class ClaudeCodeLLM(llm.LLM):
                     continue
                 parts.append(f"[Это ты уже сказал вслух без участия Claude Code: «{text}»]")
         return "\n".join(parts), ids
+
+    async def suspend(self) -> bool:
+        """Stops the idle claude process while Jarvis sleeps (~250 MB doing
+        nothing). Only with a saved session, which the next start --resume's,
+        so the conversation carries on; never mid-turn."""
+        proc = self._proc
+        if not proc.alive or not proc.session_id or proc.lock.locked():
+            return False
+        async with proc.lock:
+            await proc.stop()
+        logger.info("claude stopped for sleep (session %s kept)", proc.session_id)
+        return True
+
+    async def _rotate_if_too_big(self) -> None:
+        """Replaces an oversized session with a fresh one between turns, so
+        the next reply doesn't re-read days of history (and pays no startup:
+        the new process is already up when the owner speaks again)."""
+        proc = self._proc
+        try:
+            async with proc.lock:
+                size = proc.context_tokens
+                if size <= config.CLAUDE_CODE_MAX_CONTEXT_TOKENS or not proc.alive:
+                    return
+                logger.info("claude session at %d tokens > %d: starting a fresh one",
+                            size, config.CLAUDE_CODE_MAX_CONTEXT_TOKENS)
+                await proc.ensure_started(fresh=True)
+        except Exception:
+            logger.exception("could not start a fresh claude session; the next turn retries")
+
+    async def resume(self) -> None:
+        """Brings claude back on wake, while "Слушаю." plays, so the first turn doesn't pay the startup."""
+        try:
+            await self._prewarm_impl()
+        except Exception:
+            logger.exception("claude restart after sleep failed; the next turn retries")
 
     async def aclose(self) -> None:
         await self._proc.stop()
@@ -375,6 +445,8 @@ class ClaudeCodeStream(llm.LLMStream):
                 self._cc._own_replies.append(_norm("".join(self._reply)))
             if release_now:
                 proc.lock.release()
+            if self._sent and proc.context_tokens > config.CLAUDE_CODE_MAX_CONTEXT_TOKENS:
+                asyncio.create_task(self._cc._rotate_if_too_big())
 
     @staticmethod
     async def _drain_then_release(proc: _ClaudeProcess, *, interrupt: bool) -> None:

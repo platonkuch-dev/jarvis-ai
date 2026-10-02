@@ -38,6 +38,7 @@ from tools import (  # noqa: F401,E402  (imported for their registration side ef
     smart_home,
     system,
     tasks,
+    tg_chats,
     telegram_dm,
     triggers,
     voice_control,

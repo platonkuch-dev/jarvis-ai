@@ -15,7 +15,10 @@ import time
 from collections.abc import Awaitable, Callable
 from typing import Any, TypeVar
 
-from config import LOG_MAX_BYTES, TOOL_LOG_FILE
+from config import DATA_DIR, LOG_MAX_BYTES, TOOL_LOG_FILE
+
+# The last tool call and whether it's still running -- the HUD lights up the neuron of that block.
+ACTIVITY_FILE = DATA_DIR / "tool_activity.json"
 
 _F = TypeVar("_F", bound=Callable[..., Awaitable[Any]])
 
@@ -29,6 +32,15 @@ def _write(entry: dict[str, Any]) -> None:
         pass
     with open(TOOL_LOG_FILE, "a", encoding="utf-8") as f:
         f.write(line + "\n")
+
+
+def _note_activity(tool_name: str, started: float, done: bool) -> None:
+    try:
+        tmp = ACTIVITY_FILE.with_suffix(".tmp")
+        tmp.write_text(json.dumps({"tool": tool_name, "at": started, "done": done}), encoding="utf-8")
+        os.replace(tmp, ACTIVITY_FILE)
+    except OSError:
+        pass
 
 
 def _note_pattern_learning(tool_name: str) -> None:
@@ -56,6 +68,7 @@ def log_call(tool_name: str) -> Callable[[_F], _F]:
                 "tool": tool_name,
                 "args": kwargs,
             }
+            _note_activity(tool_name, started, False)
             try:
                 result = await fn(*args, **kwargs)
                 entry["ok"] = True
@@ -69,6 +82,7 @@ def log_call(tool_name: str) -> Callable[[_F], _F]:
             finally:
                 entry["duration_ms"] = round((time.time() - started) * 1000, 1)
                 _write(entry)
+                _note_activity(tool_name, started, True)
 
         return wrapper  # type: ignore[return-value]
 

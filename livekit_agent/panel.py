@@ -19,6 +19,7 @@ import argparse
 import asyncio
 import hmac
 import json
+import logging
 import os
 import platform
 import re
@@ -442,8 +443,37 @@ def telegram_owner_reset() -> dict[str, Any]:
 # ---------------------------------------------------------------------------
 # Telegram login (replaces running telegram_login.py in a terminal)
 # ---------------------------------------------------------------------------
+# account "jarvis" (default): Jarvis's own account. account "personal": the
+# owner's own account, read-only for chat_memory.py (the shared memory of
+# chats) -- its own session file, never used to send anything.
 
-_tg: dict[str, Any] = {"client": None, "phone": None, "hash": None}
+_tg: dict[str, Any] = {"client": None, "phone": None, "hash": None, "account": "jarvis"}
+_tg_log = logging.getLogger("jarvis-voice-agent.panel.telegram")
+_tg_log.setLevel(logging.INFO)
+if not _tg_log.handlers:
+    _tg_log.addHandler(logging.StreamHandler())   # stderr -> logs/panel.log (app.py)
+
+_CODE_ROUTES = {
+    "SentCodeTypeApp": "в приложение Telegram — сообщением от «Telegram» (синяя галочка) на телефоне или в Telegram Desktop, где этот аккаунт уже открыт. Это не SMS",
+    "SentCodeTypeSms": "по SMS",
+    "SentCodeTypeFirebaseSms": "по SMS",
+    "SentCodeTypeFragmentSms": "через Fragment (анонимный номер)",
+    "SentCodeTypeCall": "звонком — код продиктуют",
+    "SentCodeTypeFlashCall": "звонком-сбросом: код — последние цифры номера, который позвонит",
+    "SentCodeTypeMissedCall": "звонком-сбросом: код — последние цифры номера, который позвонит",
+    "SentCodeTypeEmailCode": "на почту, привязанную к аккаунту",
+    "SentCodeTypeSetUpEmailRequired": "— Telegram сначала требует привязать почту к аккаунту (в приложении: Настройки → Конфиденциальность)",
+}
+
+
+def _code_message(sent) -> str:
+    kind = type(getattr(sent, "type", None)).__name__
+    route = _CODE_ROUTES.get(kind, f"способом {kind}")
+    nxt = type(getattr(sent, "next_type", None)).__name__ if getattr(sent, "next_type", None) else ""
+    tail = " Не пришёл — нажмите «Отправить код другим способом»." if nxt else ""
+    _tg_log.info("login code sent: type=%s next=%s", kind, nxt or "-")
+    return f"Код отправлен {route}.{tail}"
+PERSONAL_TELEGRAM_SESSION = DATA_DIR / "personal_telegram"
 
 
 async def _tg_reset() -> None:
@@ -453,22 +483,58 @@ async def _tg_reset() -> None:
             await client.disconnect()
         except Exception:
             pass
-    _tg.update(client=None, phone=None, hash=None)
+    _tg.update(client=None, phone=None, hash=None, account="jarvis")
+
+
+@app.get("/api/telegram/personal")
+async def telegram_personal_status() -> dict[str, Any]:
+    """Is the owner's personal account logged in for chat reading?"""
+    if not Path(str(PERSONAL_TELEGRAM_SESSION) + ".session").exists():
+        return {"logged_in": False}
+    env = read_env()
+    api_id, api_hash = env.get("TELEGRAM_API_ID", ""), env.get("TELEGRAM_API_HASH", "")
+    if not (api_id.isdigit() and api_hash):
+        return {"logged_in": False}
+    from telethon import TelegramClient
+
+    # chat_memory.py may hold the session right now; a read-only copy avoids
+    # fighting it over the SQLite file.
+    import shutil
+    import tempfile
+
+    tmp = Path(tempfile.mkdtemp()) / "probe"
+    shutil.copyfile(str(PERSONAL_TELEGRAM_SESSION) + ".session", str(tmp) + ".session")
+    client = TelegramClient(str(tmp), int(api_id), api_hash)
+    try:
+        await client.connect()
+        if not await client.is_user_authorized():
+            return {"logged_in": False}
+        me = await client.get_me()
+        return {"logged_in": True, "name": me.first_name, "phone": me.phone}
+    except Exception:
+        return {"logged_in": False}
+    finally:
+        await client.disconnect()
+        shutil.rmtree(tmp.parent, ignore_errors=True)
 
 
 @app.post("/api/telegram/send_code")
 async def telegram_send_code(request: Request) -> dict[str, Any]:
     env = read_env()
+    body = await request.json()
+    personal = body.get("account") == "personal"
     api_id, api_hash = env.get("TELEGRAM_API_ID", ""), env.get("TELEGRAM_API_HASH", "")
-    phone = ((await request.json()).get("phone") or env.get("TELEGRAM_PHONE", "")).strip()
+    phone = (body.get("phone") or ("" if personal else env.get("TELEGRAM_PHONE", ""))).strip()
     if not (api_id.isdigit() and api_hash):
         raise HTTPException(400, "Сначала сохраните api_id и api_hash.")
     if not phone:
-        raise HTTPException(400, "Укажите номер телефона аккаунта Джарвиса.")
+        raise HTTPException(400, "Укажите номер телефона " + ("вашего аккаунта." if personal else "аккаунта Джарвиса."))
     from telethon import TelegramClient
 
     await _tg_reset()
-    client = TelegramClient(str(TELEGRAM_SESSION), int(api_id), api_hash)
+    session = PERSONAL_TELEGRAM_SESSION if personal else TELEGRAM_SESSION
+    client = TelegramClient(str(session), int(api_id), api_hash,
+                            device_model="Jarvis AI (чтение чатов)" if personal else "Jarvis AI")
     try:
         await client.connect()
         if await client.is_user_authorized():
@@ -478,10 +544,141 @@ async def telegram_send_code(request: Request) -> dict[str, Any]:
         sent = await client.send_code_request(phone)
     except Exception as exc:
         await client.disconnect()
+        _tg_log.warning("send_code failed: %s", exc)
         return {"ok": False, "message": f"Telegram не отправил код: {str(exc)[:200]}"}
-    _tg.update(client=client, phone=phone, hash=sent.phone_code_hash)
-    write_env({"TELEGRAM_PHONE": phone})
-    return {"ok": True, "message": "Код отправлен — он придёт в приложение Telegram (или SMS) на этот номер."}
+    _tg.update(client=client, phone=phone, hash=sent.phone_code_hash, account="personal" if personal else "jarvis")
+    if not personal:
+        write_env({"TELEGRAM_PHONE": phone})
+    return {"ok": True, "message": _code_message(sent), "can_resend": bool(getattr(sent, "next_type", None))}
+
+
+# QR login for the personal account: Telegram usually sends a new device's
+# login code into the app itself and offers no SMS -- scanning a QR from the
+# phone (Settings > Devices > Link Desktop Device) needs no code at all.
+_qr: dict[str, Any] = {"client": None, "login": None, "task": None, "state": "idle", "message": ""}
+
+
+async def _qr_reset() -> None:
+    task = _qr.get("task")
+    if task is not None:
+        task.cancel()
+    client = _qr.get("client")
+    if client is not None and _qr.get("state") != "password":
+        try:
+            await client.disconnect()
+        except Exception:
+            pass
+    _qr.update(client=None, login=None, task=None, state="idle", message="")
+
+
+async def _qr_wait() -> None:
+    from telethon.errors import SessionPasswordNeededError
+
+    try:
+        user = await _qr["login"].wait(timeout=_qr_timeout())
+        _qr.update(state="ok", message=f"Вход выполнен: {user.first_name} ({user.phone}). Джарвис начнёт читать "
+                                       "ваши чаты в течение минуты — только чтение, ничего не отправляет.")
+        _tg_log.info("personal account linked by QR")
+        await _qr["client"].disconnect()
+    except SessionPasswordNeededError:
+        _qr.update(state="password", message="QR принят. На аккаунте облачный пароль — введите его.")
+    except asyncio.TimeoutError:
+        _qr.update(state="expired", message="QR-код устарел — показываю новый.")
+    except Exception as exc:
+        _tg_log.warning("QR login failed: %s", exc)
+        _qr.update(state="error", message=f"Не получилось: {str(exc)[:200]}")
+
+
+def _qr_timeout() -> float:
+    from datetime import datetime, timezone
+
+    login = _qr.get("login")
+    if login is None:
+        return 30.0
+    return max(5.0, (login.expires - datetime.now(timezone.utc)).total_seconds())
+
+
+def _qr_svg(url: str) -> str:
+    import segno
+
+    return segno.make(url, error="m").svg_inline(scale=6, border=2, dark="#0b1220", light="#ffffff")
+
+
+@app.post("/api/telegram/qr_start")
+async def telegram_qr_start() -> dict[str, Any]:
+    env = read_env()
+    api_id, api_hash = env.get("TELEGRAM_API_ID", ""), env.get("TELEGRAM_API_HASH", "")
+    if not (api_id.isdigit() and api_hash):
+        raise HTTPException(400, "Сначала сохраните api_id и api_hash.")
+    from telethon import TelegramClient
+
+    await _qr_reset()
+    await _tg_reset()
+    client = TelegramClient(str(PERSONAL_TELEGRAM_SESSION), int(api_id), api_hash,
+                            device_model="Jarvis AI (чтение чатов)")
+    try:
+        await client.connect()
+        if await client.is_user_authorized():
+            me = await client.get_me()
+            await client.disconnect()
+            return {"ok": True, "state": "ok", "message": f"Уже подключён: {me.first_name} ({me.phone})."}
+        login = await client.qr_login()
+    except Exception as exc:
+        await client.disconnect()
+        _tg_log.warning("qr_start failed: %s", exc)
+        return {"ok": False, "state": "error", "message": f"Telegram не выдал QR-код: {str(exc)[:200]}"}
+    _qr.update(client=client, login=login, state="waiting", message="")
+    _qr["task"] = asyncio.create_task(_qr_wait())
+    return {"ok": True, "state": "waiting", "svg": _qr_svg(login.url)}
+
+
+@app.get("/api/telegram/qr_status")
+async def telegram_qr_status() -> dict[str, Any]:
+    state = _qr.get("state", "idle")
+    if state == "expired" and _qr.get("login") is not None:
+        try:
+            await _qr["login"].recreate()
+            _qr.update(state="waiting", message="")
+            _qr["task"] = asyncio.create_task(_qr_wait())
+            return {"state": "waiting", "svg": _qr_svg(_qr["login"].url)}
+        except Exception as exc:
+            _qr.update(state="error", message=f"Не получилось обновить QR: {str(exc)[:200]}")
+    return {"state": _qr.get("state", "idle"), "message": _qr.get("message", "")}
+
+
+@app.post("/api/telegram/qr_password")
+async def telegram_qr_password(request: Request) -> dict[str, Any]:
+    client = _qr.get("client")
+    if client is None or _qr.get("state") != "password":
+        raise HTTPException(400, "Сначала отсканируйте QR-код.")
+    password = (await request.json()).get("password") or ""
+    try:
+        await client.sign_in(password=password)
+        me = await client.get_me()
+    except Exception as exc:
+        return {"ok": False, "message": f"Пароль не подошёл: {str(exc)[:200]}"}
+    await client.disconnect()
+    _qr.update(client=None, state="ok", message="")
+    _tg_log.info("personal account linked by QR + 2FA")
+    return {"ok": True, "message": f"Вход выполнен: {me.first_name} ({me.phone}). Джарвис начнёт читать "
+                                   "ваши чаты в течение минуты — только чтение, ничего не отправляет."}
+
+
+@app.post("/api/telegram/resend_code")
+async def telegram_resend_code() -> dict[str, Any]:
+    """The code didn't arrive: ask Telegram for the next delivery method (SMS / call)."""
+    from telethon.tl.functions.auth import ResendCodeRequest
+
+    client = _tg.get("client")
+    if client is None:
+        raise HTTPException(400, "Сначала запросите код.")
+    try:
+        sent = await client(ResendCodeRequest(_tg["phone"], _tg["hash"]))
+    except Exception as exc:
+        _tg_log.warning("resend_code failed: %s", exc)
+        return {"ok": False, "message": f"Telegram не отправил код повторно: {str(exc)[:200]}"}
+    _tg["hash"] = sent.phone_code_hash
+    return {"ok": True, "message": _code_message(sent), "can_resend": bool(getattr(sent, "next_type", None))}
 
 
 @app.post("/api/telegram/sign_in")
@@ -506,7 +703,11 @@ async def telegram_sign_in(request: Request) -> dict[str, Any]:
         return {"ok": False, "message": "Код неверный или устарел — запросите новый."}
     except Exception as exc:
         return {"ok": False, "message": f"Не удалось войти: {str(exc)[:200]}"}
+    personal = _tg.get("account") == "personal"
     await _tg_reset()
+    if personal:
+        return {"ok": True, "message": f"Вход выполнен: {me.first_name} ({me.phone}). Джарвис начнёт читать "
+                                       "ваши чаты в течение минуты — только чтение, ничего не отправляет."}
     # The chat bridge and monitor keep their own copies of the session,
     # bootstrapped only when missing -- a stale copy from another account
     # would silently keep using it, so drop them (best effort: a running

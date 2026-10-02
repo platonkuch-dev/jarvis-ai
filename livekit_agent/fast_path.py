@@ -184,6 +184,11 @@ def parse(text: str, *, computer_use_running: bool = False) -> Intent | None:
     if t in ("закрой план", "закрой план дня", "убери план", "закрой расписание", "убери расписание", "спрячь план",
              "закрой список дел", "убери список дел", "вернись", "вернись к лицу"):
         return Intent("close_day_plan", {})
+    if re.fullmatch(r"(?:открой|покажи|включи|верни|выведи) (?:мне )?(?:сво[её] |тво[её] )?лицо", t):
+        return Intent("show_face", {})
+    if re.fullmatch(r"(?:закрой|убери|спрячь|выключи) (?:сво[её] |тво[её] )?лицо"
+                    r"|(?:верни|покажи|включи) (?:мне )?нейрон|стань нейроном", t):
+        return Intent("hide_face", {})
     if t in ("закрой панель", "убери панель", "закрой худ"):
         return Intent("close_hud_panel", {})
 
@@ -244,6 +249,30 @@ def _volume_step(delta: int) -> str:
     return f"Громкость {new}%."
 
 
+# Device commands that can hang on a weak radio link (the LED strip over BLE):
+# acknowledged at once and run in the background, so a slow device never holds
+# up the conversation -- while a fast-path command is running, every later
+# turn waits behind it, which sounded like "Jarvis stopped hearing me".
+_BACKGROUND: set = set()
+
+
+def _led_ack(args: dict) -> str:
+    action, value = args.get("action"), args.get("value", "")
+    return {"on": "Включаю ленту.", "off": "Выключаю ленту.", "color": "Меняю цвет ленты.",
+            "brightness": f"Ставлю яркость ленты {value}%."}.get(action, "Ща.")
+
+
+async def _run_in_background(impl, args: dict) -> None:
+    from tools import runtime
+
+    try:
+        result = await impl(**args)
+    except Exception as exc:
+        result = {"status": "error", "message": f"Не получилось: {exc}"}
+    if isinstance(result, dict) and result.get("status") not in ("ok", None):
+        await runtime.say(result.get("speech") or result.get("message", "Не получилось."))
+
+
 async def execute(intent: Intent) -> tuple[bool, str]:
     """-> (handled, text to say). handled=False means "let the LLM do it"."""
     import asyncio
@@ -260,6 +289,11 @@ async def execute(intent: Intent) -> tuple[bool, str]:
     impl = IMPL_REGISTRY.get(intent.tool)
     if impl is None:
         return False, ""
+    if intent.tool == "led_strip":
+        task = asyncio.create_task(_run_in_background(impl, dict(intent.args)), name="fast-path-led")
+        _BACKGROUND.add(task)
+        task.add_done_callback(_BACKGROUND.discard)
+        return True, _led_ack(intent.args)
     try:
         result = await impl(**intent.args)
     except Exception:

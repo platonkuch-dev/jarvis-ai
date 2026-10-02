@@ -90,6 +90,9 @@ TELEGRAM_BRIDGE_MAX_STEPS = int(os.environ.get("TELEGRAM_BRIDGE_MAX_STEPS", "8")
 # tool_result round-trip plus the final reply), so this bounds conversation
 # depth without ever risking a trim landing mid-round-trip.
 TELEGRAM_BRIDGE_MAX_HISTORY = 8
+# How often the bridge asks Telegram for messages pushed to another of the
+# account's connections instead of to it (see telegram_bridge._catch_up_loop).
+TELEGRAM_BRIDGE_CATCH_UP_S = float(os.environ.get("TELEGRAM_BRIDGE_CATCH_UP_S", "4"))
 # Persisted so a restart (this project restarts a lot -- crashes, updates,
 # manual relaunches) doesn't wipe every open conversation and force it to
 # start cold with people mid-chat.
@@ -140,6 +143,18 @@ PHONE_ALLOWED_NUMBERS = [
 # file. Pure Python + psutil checks, no Claude calls at all -- this is a
 # free background feature, not a token-spending one.
 TELEGRAM_MONITOR_SESSION_PATH = str(DATA_DIR / "jarvis_telegram_monitor")
+
+# --- Shared chat/conversation memory (chat_memory.py, journal.py) ---
+# The archiver's own copy of Jarvis's session (bootstrapped from the main
+# one), and the owner's personal account, logged in once by the owner with
+# `telegram_login.py --personal`. Only chat_memory.py opens either file.
+TELEGRAM_ARCHIVE_SESSION_PATH = str(DATA_DIR / "jarvis_telegram_archive")
+TELEGRAM_PERSONAL_SESSION_PATH = str(DATA_DIR / "personal_telegram")
+CHAT_SYNC_S = float(os.environ.get("CHAT_SYNC_S", "60"))
+CHAT_MAX_DIALOGS = int(os.environ.get("CHAT_MAX_DIALOGS", "60"))
+CHAT_BACKFILL = int(os.environ.get("CHAT_BACKFILL", "30"))       # messages per chat on first sight
+CHAT_DIGEST_EVERY_S = float(os.environ.get("CHAT_DIGEST_EVERY_S", "1200"))
+JOURNAL_DIGEST_FILE = DATA_DIR / "journal_digest.json"
 MONITOR_CHECK_INTERVAL_S = float(os.environ.get("MONITOR_CHECK_INTERVAL_S", "300"))
 MONITOR_DISK_FREE_PCT_THRESHOLD = float(os.environ.get("MONITOR_DISK_FREE_PCT_THRESHOLD", "10"))
 MONITOR_MEMORY_PCT_THRESHOLD = float(os.environ.get("MONITOR_MEMORY_PCT_THRESHOLD", "90"))
@@ -200,6 +215,11 @@ CLAUDE_CODE_THINKING = os.environ.get("CLAUDE_CODE_THINKING", "0").strip().lower
 # Continue the same Claude Code conversation after a restart (--resume).
 CLAUDE_CODE_RESUME = os.environ.get("CLAUDE_CODE_RESUME", "1").strip().lower() in ("1", "true", "yes", "on")
 CLAUDE_CODE_SESSION_FILE = DATA_DIR / "claude_code_session.json"
+# Every turn re-reads the whole session, so a conversation resumed for days
+# makes each reply slower (a fresh one is ~45-65k tokens of tools and prompt;
+# unchecked it reached 230k). Past this size Jarvis starts a fresh session
+# after the reply; the journal digest in the prompt carries what was said.
+CLAUDE_CODE_MAX_CONTEXT_TOKENS = int(os.environ.get("CLAUDE_CODE_MAX_CONTEXT_TOKENS", "110000"))
 # Where the `claude` process runs; its CLAUDE.md there is read every session.
 CLAUDE_CODE_WORKDIR = Path(os.environ.get("CLAUDE_CODE_WORKDIR", str(DATA_DIR / "claude_workspace")))
 # Full access to the PC with voice confirmation for dangerous steps:
@@ -432,7 +452,7 @@ USE_CLAUDE_CLI = os.environ.get("USE_CLAUDE_CLI", "0").strip().lower() in ("1", 
 TTS_VOICE_STATE_FILE = DATA_DIR / "tts_voice.json"
 
 # --- Wake hotkey / auto-sleep (desktop app, worker.py console) ---
-# Global hotkey (via the `keyboard` package) that wakes the agent from sleep.
+# Global hotkey (Win32 RegisterHotKey, global_hotkeys.py) that wakes the agent from sleep.
 WAKE_HOTKEY = os.environ.get("WAKE_HOTKEY", "f10")
 # Global hotkey that turns the microphone off / back on (mic_control.py).
 MIC_HOTKEY = os.environ.get("MIC_HOTKEY", "f9")
@@ -463,6 +483,10 @@ OPEN_METEO_FORECAST_URL = "https://api.open-meteo.com/v1/forecast"
 WAKE_WORD_ENABLED = os.environ.get("WAKE_WORD_ENABLED", "1").strip().lower() in ("1", "true", "yes", "on")
 WAKE_WORD_MODEL = os.environ.get("WAKE_WORD_MODEL", "hey_jarvis")
 WAKE_WORD_THRESHOLD = float(os.environ.get("WAKE_WORD_THRESHOLD", "0.5"))
+# Silence gate (int16 RMS): while the room is quieter than this (or than 2.5x
+# the measured noise floor) the wake-word models don't run at all. Lower it if
+# a quiet "Hey Jarvis" is missed; 0 turns the gate off (always scoring).
+WAKE_WORD_GATE_RMS = float(os.environ.get("WAKE_WORD_GATE_RMS", "50"))
 
 # --- HUD panel: face + status + subtitles + day plan on one page (hud_panel.py) ---
 # HUD_PANEL_AUTO=1: with a second monitor connected, the panel opens full
@@ -594,12 +618,19 @@ PROJECT_SEARCH_DIRS = [d for d in (PROJECTS_DIR, Path.home() / "Desktop") if d.e
 # explicit full name rather than the "sonnet" alias so it doesn't silently
 # drift to a newer Sonnet snapshot later.
 CODING_AGENT_MODEL = os.environ.get("CODING_AGENT_MODEL", "claude-sonnet-5")
-# coding_agent "start": run Claude Code headless in the background with its
-# permissions granted up front (no window, no prompts; destructive commands
-# in CLAUDE_CODE_DISALLOWED_TOOLS stay blocked). 0 = the old visible
-# interactive terminal with Claude Code's own approval prompts.
-CODING_AGENT_BACKGROUND = os.environ.get("CODING_AGENT_BACKGROUND", "1").strip().lower() in ("1", "true", "yes", "on")
+# coding_agent "start" always runs Claude Code headless, live on the hologram
+# (code_feed.py); there is no console mode. CODING_SHOW_HUD=1 opens the
+# hologram panel on HUD_PANEL_MONITOR when coding starts and it isn't open.
+CODING_SHOW_HUD = os.environ.get("CODING_SHOW_HUD", "1").strip().lower() in ("1", "true", "yes", "on")
 CODING_AGENT_TIMEOUT_S = float(os.environ.get("CODING_AGENT_TIMEOUT_S", "3600"))
+# Jarvis's own source tree (the git checkout with installer/). The installed
+# app is a copy without git or the build tools, so "work on yourself" must
+# edit this folder instead. Unset -> this folder, if it is a source tree.
+_source = os.environ.get("JARVIS_SOURCE_DIR", "").strip()
+JARVIS_SOURCE_DIR = Path(_source) if _source else (BASE_DIR if (BASE_DIR / "installer" / "build.py").exists() else None)
+# After Claude Code changes Jarvis's own code: build the installer, commit and
+# push, publish a GitHub release and install it (scripts/self_release.py).
+SELF_RELEASE = os.environ.get("SELF_RELEASE", "1").strip().lower() in ("1", "true", "yes", "on")
 FILE_SEARCH_MAX_SCAN = 20000  # safety cap on number of files walked
 
 # ---------------------------------------------------------------------------

@@ -113,6 +113,39 @@ async def close_day_plan(context: RunContext) -> str:
     return result["message"]
 
 
+@register_impl("show_face")
+@log_call("show_face")
+async def _show_face() -> dict:
+    await asyncio.to_thread(hud_panel.set_face, True)
+    return {"status": "ok", "message": "Нейрон раскрывается в лицо."}
+
+
+@register_tool
+@function_tool
+async def show_face(context: RunContext) -> str:
+    """Jarvis's main form on the HUD/wallpaper is a 3D neuron; this opens his
+    hologram face in its place (the neuron folds into its orb, the face assembles):
+    "покажи лицо", "открой лицо", "покажи своё лицо". Say one short line after."""
+    result = await _show_face()
+    return result["message"]
+
+
+@register_impl("hide_face")
+@log_call("hide_face")
+async def _hide_face() -> dict:
+    await asyncio.to_thread(hud_panel.set_face, False)
+    return {"status": "ok", "message": "Лицо убрал, снова нейрон."}
+
+
+@register_tool
+@function_tool
+async def hide_face(context: RunContext) -> str:
+    """Put the face away and go back to the neuron: "убери лицо", "закрой лицо",
+    "верни нейрон", "стань нейроном". Say one short line after."""
+    result = await _hide_face()
+    return result["message"]
+
+
 @register_impl("open_hud_panel")
 @log_call("open_hud_panel")
 async def _open_hud_panel(*, monitor: int = 2) -> dict:

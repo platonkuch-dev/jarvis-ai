@@ -53,6 +53,13 @@ EFFECTS: dict[str, int] = {
 
 _client = None
 _lock = asyncio.Lock()
+# A command may never hold anything up for long: at the strip's usual spot the
+# signal is weak (~-85 dBm) and bleak can spend minutes reconnecting. Past this
+# it gives up and says so. And only the newest command matters -- "выключи"
+# said three times while the first is still connecting runs once, not three
+# times in a row.
+_SEND_TIMEOUT_S = 15.0
+_latest = 0
 _idle_task: asyncio.Task | None = None
 _ble_loop: asyncio.AbstractEventLoop | None = None
 
@@ -187,10 +194,16 @@ async def _connect():
     raise last
 
 
-async def _send(frames: list[bytes]) -> None:
+class _Superseded(Exception):
+    pass
+
+
+async def _send(frames: list[bytes], gen: int = 0) -> None:
     global _client, _idle_task
 
     async with _lock:
+        if gen and gen != _latest:
+            raise _Superseded()
         for attempt in range(2):
             if _client is None or not _client.is_connected:
                 _client = await _connect()
@@ -243,8 +256,16 @@ async def _led_strip(*, action: str, value: str = "") -> dict:
     frames = _frames(action, value)
     if isinstance(frames, str):
         return {"status": "error", "message": frames}
+    global _latest
+    _latest += 1
+    gen = _latest
     try:
-        await _in_ble_thread(_send(frames))
+        await _in_ble_thread(asyncio.wait_for(_send(frames, gen), _SEND_TIMEOUT_S))
+    except _Superseded:
+        return {"status": "ok", "message": "Эту команду перебила более новая."}
+    except asyncio.TimeoutError:
+        return {"status": "error", "message": (
+            "Лента не ответила за 15 секунд — скорее всего, она далеко от компьютера и сигнал слабый.")}
     except LookupError as exc:
         if str(exc) == "no_char":
             return {"status": "error", "message": "Устройство найдено, но это не лента Lotus Lantern."}

@@ -5,8 +5,10 @@ A tiny localhost HTTP server feeds it:
   /            the page (dayplan/index.html)
   /data.json   the day plan (dayplan_data.collect())
   /events      Server-Sent Events, ~30 per second: status, voice level,
-               sibilance, screen-watch flag, and the conversation lines when
-               they change -- so the face breathes, thinks and talks live.
+               sibilance, screen-watch flag, and the conversation lines and
+               the live Claude Code session (code_feed.py) when they change --
+               so the face breathes, thinks and talks live, and coding shows
+               up here instead of in a console.
 
 Normally hud_bar.py hosts it (it already owns the voice-level feed from
 lipsync_bridge and polls hud_bridge); ensure_server() starts a fallback copy
@@ -41,21 +43,43 @@ PAGE = config.BASE_DIR / "dayplan" / "index.html"
 PROFILE_DIR = config.DATA_DIR / "dayplan_browser"
 URL = f"http://127.0.0.1:{PORT}/"
 STATE_FILE = config.DATA_DIR / "hud_panel_state.json"
+_ACTIVITY_FILE = config.DATA_DIR / "tool_activity.json"     # tools/_logging.py: the tool running now
 _TICK_S = 1 / 30
+_SLEEP_TICK_S = 0.2
+
+
+def _read_panel_state() -> dict:
+    try:
+        state = json.loads(STATE_FILE.read_text(encoding="utf-8"))
+        return state if isinstance(state, dict) else {}
+    except (OSError, ValueError):
+        return {}
+
+
+def _write_panel_state(**changes) -> None:
+    state = _read_panel_state()
+    state.update(changes, at=time.time())
+    tmp = STATE_FILE.with_suffix(".tmp")
+    tmp.write_text(json.dumps(state), encoding="utf-8")
+    tmp.replace(STATE_FILE)
 
 
 def set_plan(visible: bool) -> None:
     """Show/hide the day plan inside the open panel (it animates in/out)."""
-    tmp = STATE_FILE.with_suffix(".tmp")
-    tmp.write_text(json.dumps({"plan": bool(visible), "at": time.time()}), encoding="utf-8")
-    tmp.replace(STATE_FILE)
+    _write_panel_state(plan=bool(visible))
 
 
 def plan_visible() -> bool:
-    try:
-        return bool(json.loads(STATE_FILE.read_text(encoding="utf-8")).get("plan"))
-    except (OSError, ValueError):
-        return False
+    return bool(_read_panel_state().get("plan"))
+
+
+def set_face(visible: bool) -> None:
+    """Jarvis's main form is the 3D neuron; this opens (or closes) his face in its place."""
+    _write_panel_state(face=bool(visible))
+
+
+def face_visible() -> bool:
+    return bool(_read_panel_state().get("face"))
 
 
 _net_prev: dict = {}
@@ -112,7 +136,7 @@ def _handler(feed: _Feed):
             self.wfile.write(body)
 
         def do_POST(self) -> None:   # noqa: N802
-            """/control {"mic": bool} / {"plan": bool} -- the panel's buttons.
+            """/control {"mic": bool} / {"plan": bool} / {"face": bool} / {"code_stop": true} -- the panel's buttons.
             The custom X-Jarvis header can't be sent cross-site without a CORS
             preflight, which this server never approves: only the panel's own
             page can press these buttons."""
@@ -132,6 +156,13 @@ def _handler(feed: _Feed):
                 logger.info("panel button: microphone %s", "on" if body["mic"] else "off")
             if "plan" in body:
                 set_plan(bool(body["plan"]))
+            if "face" in body:
+                set_face(bool(body["face"]))
+            if body.get("code_stop"):
+                import code_feed
+
+                code_feed.request_stop()
+                logger.info("panel button: stop Claude Code")
             self._send(200, b'{"ok": true}', "application/json")
 
         def do_GET(self) -> None:   # noqa: N802
@@ -168,9 +199,12 @@ def _handler(feed: _Feed):
             self.send_header("Cache-Control", "no-store")
             self.end_headers()
             feed.add(1)
+            import code_feed
             import mic_control
 
-            last_lines, last_state_read, state, watching, plan, muted = None, 0.0, {}, False, False, False
+            last_lines, last_state_read, state, watching, plan, muted, face = None, 0.0, {}, False, False, False, False
+            code_seen = -1.0
+            act_seen = -1.0
             try:
                 while True:
                     now = time.monotonic()
@@ -180,19 +214,35 @@ def _handler(feed: _Feed):
                             watching = bool(screen_watch_bridge.read_state().get("watching"))
                         except Exception:
                             watching = False
-                        plan = plan_visible()
+                        panel = _read_panel_state()
+                        plan, face = bool(panel.get("plan")), bool(panel.get("face"))
                         muted = mic_control.is_muted()
                         last_state_read = now
                     level, sib = feed.level_fn() if feed.level_fn else (0.0, 0.0)
                     msg = {"s": state.get("status", "idle"), "l": round(float(level), 3),
-                           "b": round(float(sib), 3), "w": watching, "p": plan, "m": muted, "u": state.get("updated_at", 0.0)}
+                           "b": round(float(sib), 3), "w": watching, "p": plan, "f": face, "m": muted, "u": state.get("updated_at", 0.0)}
                     lines = state.get("lines") or []
                     if lines != last_lines:
                         msg["lines"] = lines[-4:]
                         last_lines = lines
+                    try:
+                        act_mtime = _ACTIVITY_FILE.stat().st_mtime
+                    except OSError:
+                        act_mtime = 0.0
+                    if act_mtime != act_seen:
+                        act_seen = act_mtime
+                        try:
+                            msg["t"] = json.loads(_ACTIVITY_FILE.read_text(encoding="utf-8"))
+                        except (OSError, ValueError):
+                            pass
+                    code_mtime = code_feed.mtime()
+                    if code_mtime != code_seen:
+                        msg["code"] = code_feed.read()
+                        code_seen = code_mtime
                     self.wfile.write(b"data: " + json.dumps(msg, ensure_ascii=False).encode("utf-8") + b"\n\n")
                     self.wfile.flush()
-                    time.sleep(_TICK_S)
+                    # asleep the face only breathes: 5 updates a second are plenty
+                    time.sleep(_SLEEP_TICK_S if msg["s"] == "sleeping" else _TICK_S)
             except (BrokenPipeError, ConnectionResetError, ConnectionAbortedError, OSError):
                 pass
             finally:

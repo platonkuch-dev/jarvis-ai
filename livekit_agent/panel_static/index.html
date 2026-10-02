@@ -160,6 +160,10 @@ td.name { font-weight: 620; word-break: normal; }
   main { padding: 26px 16px 80px; }
   .fields, .sec-desc, .row, .tg-flow, .help-links { margin-left: 0; }
 }
+  .tg-qr { background: #fff; padding: 14px; border-radius: 12px; width: max-content; margin: 10px 0; }
+  .tg-qr svg { display: block; width: 240px; height: 240px; }
+  .tg-qr .hint { color: #334; max-width: 240px; font-size: 13px; line-height: 1.4; margin-top: 10px; }
+  .tg-flow .hint { font-size: 13px; opacity: 0.75; margin: 10px 0 4px; }
 </style>
 </head>
 <body>
@@ -393,7 +397,7 @@ function renderGroup(g, cfg, st, isOpen) {
   const body = [h("p", { class: "sec-desc" }, g.desc), grid];
   const saveBtn = h("button", { class: "btn primary", onclick: e => saveAndTest(e.currentTarget) }, g.test ? "Сохранить и проверить" : "Сохранить");
   body.push(h("div", { class: "row" }, saveBtn, msg));
-  if (g.id === "telegram") body.push(telegramFlow(save, msg));
+  if (g.id === "telegram") body.push(telegramFlow(save, msg), personalTelegramFlow());
   if (g.links.length) body.push(h("ul", { class: "help-links", style: "margin-top:16px" }, g.links.map(([t, u]) => h("li", {}, h("a", { href: u, target: "_blank", rel: "noopener" }, t)))));
 
   return h("details", { class: "section", "data-group": g.id, open: isOpen },
@@ -451,6 +455,92 @@ function telegramFlow(save, outerMsg) {
   return h("div", { class: "tg-flow" },
     h("div", { class: "field" }, h("label", { for: "tg-phone" }, "Вход в аккаунт Джарвиса (нужен один раз)"), phone),
     code, pass, h("div", { class: "row", style: "margin:0" }, send, confirm), msg, telegramOwner());
+}
+
+// The owner's own account, read-only, for Jarvis's shared memory of chats (chat_memory.py)
+function personalTelegramFlow() {
+  const phone = h("input", { id: "tgp-phone", type: "tel", placeholder: "+380… (ваш номер)", autocomplete: "off" });
+  const code = h("input", { id: "tgp-code", inputmode: "numeric", placeholder: "Код из Telegram", autocomplete: "one-time-code", hidden: true });
+  const pass = h("input", { id: "tgp-pass", type: "password", placeholder: "Пароль двухфакторной защиты", hidden: true });
+  const msg = h("span", { class: "msg" });
+  const send = h("button", { class: "btn", type: "button" }, "Войти в мой Telegram");
+  const confirm = h("button", { class: "btn primary", type: "button", hidden: true }, "Подтвердить код");
+  const resend = h("button", { class: "btn", type: "button", hidden: true }, "Отправить код другим способом");
+  const qrBtn = h("button", { class: "btn primary", type: "button" }, "Войти по QR-коду");
+  const qrBox = h("div", { class: "tg-qr", hidden: true });
+  const qrPass = h("input", { id: "tgp-qrpass", type: "password", placeholder: "Облачный пароль Telegram", hidden: true });
+  const qrPassBtn = h("button", { class: "btn primary", type: "button", hidden: true }, "Войти с паролем");
+  let qrTimer = null;
+  const qrShow = (svg) => {
+    qrBox.innerHTML = svg + '<p class="hint">Телефон: Telegram → Настройки → Устройства → «Подключить устройство» → наведите камеру на код.</p>';
+    qrBox.hidden = false;
+  };
+  const qrPoll = () => {
+    clearInterval(qrTimer);
+    qrTimer = setInterval(async () => {
+      try {
+        const r = await api("/api/telegram/qr_status");
+        if (r.svg) qrShow(r.svg);
+        if (r.state === "ok") { clearInterval(qrTimer); qrBox.hidden = true; say(true, r.message); }
+        else if (r.state === "password") { clearInterval(qrTimer); qrBox.hidden = true; qrPass.hidden = qrPassBtn.hidden = false; qrPass.focus(); say(true, r.message); }
+        else if (r.state === "error") { clearInterval(qrTimer); qrBox.hidden = true; say(false, r.message); }
+      } catch (e) { /* panel restarting */ }
+    }, 2000);
+  };
+  qrBtn.onclick = async () => {
+    qrBtn.disabled = true; say(true, "Получаю QR-код у Telegram…");
+    try {
+      const r = await api("/api/telegram/qr_start", { method: "POST", body: {} });
+      if (r.svg) { qrShow(r.svg); say(true, "Отсканируйте QR телефоном, где открыт ваш Telegram."); qrPoll(); }
+      else say(r.ok, r.message);
+    } catch (e) { say(false, e.message); }
+    qrBtn.disabled = false;
+  };
+  qrPassBtn.onclick = async () => {
+    qrPassBtn.disabled = true;
+    try {
+      const r = await api("/api/telegram/qr_password", { method: "POST", body: { password: qrPass.value } });
+      say(r.ok, r.message);
+      if (r.ok) qrPass.hidden = qrPassBtn.hidden = true;
+    } catch (e) { say(false, e.message); }
+    qrPassBtn.disabled = false;
+  };
+  const say = (ok, text) => { msg.className = "msg " + (ok ? "ok" : "bad"); msg.textContent = text; };
+  api("/api/telegram/personal").then(r => { if (r.logged_in) say(true, `Подключён: ${r.name} (${r.phone}). Джарвис читает ваши чаты.`); }).catch(() => {});
+
+  send.onclick = async () => {
+    send.disabled = true; say(true, "Запрашиваю код…");
+    try {
+      const r = await api("/api/telegram/send_code", { method: "POST", body: { phone: phone.value, account: "personal" } });
+      say(r.ok, r.message);
+      if (r.ok && !r.already) { code.hidden = false; confirm.hidden = false; resend.hidden = !r.can_resend; code.focus(); }
+    } catch (e) { say(false, e.message); }
+    send.disabled = false;
+  };
+  resend.onclick = async () => {
+    resend.disabled = true; say(true, "Прошу Telegram отправить код иначе…");
+    try {
+      const r = await api("/api/telegram/resend_code", { method: "POST", body: {} });
+      say(r.ok, r.message);
+      resend.hidden = !r.can_resend;
+    } catch (e) { say(false, e.message); }
+    resend.disabled = false;
+  };
+  confirm.onclick = async () => {
+    confirm.disabled = true;
+    try {
+      const r = await api("/api/telegram/sign_in", { method: "POST", body: { code: code.value, password: pass.value } });
+      if (r.needs_password) { pass.hidden = false; pass.focus(); }
+      say(r.ok, r.message);
+      if (r.ok) { code.hidden = pass.hidden = confirm.hidden = resend.hidden = true; }
+    } catch (e) { say(false, e.message); }
+    confirm.disabled = false;
+  };
+  return h("div", { class: "tg-flow" },
+    h("div", { class: "field" }, h("label", { for: "tgp-phone" }, "Ваш личный Telegram — Джарвис будет только читать чаты, чтобы помнить переписку"), phone),
+    h("div", { class: "row", style: "margin:0" }, qrBtn), qrBox, qrPass, qrPassBtn,
+    h("p", { class: "hint" }, "Или по коду (Telegram пришлёт его в приложение, в чат «Telegram», не SMS):"),
+    code, pass, h("div", { class: "row", style: "margin:0" }, send, confirm, resend), msg);
 }
 
 function telegramOwner() {

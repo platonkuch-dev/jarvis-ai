@@ -38,6 +38,7 @@ BAR_LOG_PATH = config.LOGS_DIR / "hud_bar.log"
 PHONE_LOG_PATH = config.LOGS_DIR / "phone_worker.log"
 TELEGRAM_LOG_PATH = config.LOGS_DIR / "telegram_bridge.log"
 MONITOR_LOG_PATH = config.LOGS_DIR / "proactive_monitor.log"
+CHAT_MEMORY_LOG_PATH = config.LOGS_DIR / "chat_memory.log"
 SUPERVISOR_LOG_PATH = config.LOGS_DIR / "supervisor.log"
 PANEL_LOG_PATH = config.LOGS_DIR / "panel.log"
 PANEL_PORT = 8765
@@ -206,7 +207,11 @@ _monitor = _ManagedProcess("proactive_monitor", [str(BASE_DIR / "proactive_monit
 # The control panel (settings, capabilities, voices) stays up for as long as
 # the tray app does, so "Открыть панель" in the tray always has something to open.
 _panel = _ManagedProcess("panel", [str(BASE_DIR / "panel.py"), "--no-browser", "--port", str(PANEL_PORT)], PANEL_LOG_PATH)
-_ALL_PROCESSES = [_worker, _bar, _phone_worker, _telegram_bridge, _monitor, _panel]
+# Shared memory of chats and conversations: archives Telegram (when set up)
+# and digests the journal -- the digest is useful with voice alone, so it
+# runs whenever the core does.
+_chat_memory = _ManagedProcess("chat_memory", [str(BASE_DIR / "chat_memory.py")], CHAT_MEMORY_LOG_PATH, enabled=_core_configured)
+_ALL_PROCESSES = [_worker, _bar, _phone_worker, _telegram_bridge, _monitor, _chat_memory, _panel]
 
 
 def _watchdog_loop() -> None:
@@ -231,6 +236,7 @@ def _start_all() -> None:
     _phone_worker.start()
     _telegram_bridge.start()
     _monitor.start()
+    _chat_memory.start()
     _panel.start()
 
 
@@ -240,6 +246,7 @@ def _stop_all() -> None:
     _phone_worker.stop()
     _telegram_bridge.stop()
     _monitor.stop()
+    _chat_memory.stop()
     _panel.stop()
 
 

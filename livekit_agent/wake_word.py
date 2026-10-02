@@ -69,15 +69,15 @@ class WakeWordDetector:
 
     def reset(self) -> None:
         np = self._np
-        self._raw: deque[int] = deque(maxlen=SAMPLE_RATE * 2)
+        self._tail = np.zeros(_MEL_CONTEXT, dtype=np.float32)   # last samples of the previous chunk
         self._mels = np.ones((_MEL_WINDOW, 32), dtype=np.float32)
         self._embeddings: deque = deque(maxlen=_N_EMBEDDINGS)
 
     def score(self, chunk) -> float:
         np = self._np
-        chunk = np.asarray(chunk, dtype=np.int16).reshape(-1)
-        self._raw.extend(chunk.tolist())
-        audio = np.array(list(self._raw)[-(len(chunk) + _MEL_CONTEXT):], dtype=np.float32)[None, :]
+        chunk = np.asarray(chunk, dtype=np.int16).reshape(-1).astype(np.float32)
+        audio = np.concatenate((self._tail, chunk))[None, :]
+        self._tail = audio[0, -_MEL_CONTEXT:].copy()
         mel = np.squeeze(self._mel.run(None, {self._mel_in: audio})[0]) / 10 + 2
         self._mels = np.vstack((self._mels, mel))[-_MEL_WINDOW * 2:]
         window = self._mels[-_MEL_WINDOW:].astype(np.float32)[None, :, :, None]
@@ -86,6 +86,48 @@ class WakeWordDetector:
             return 0.0  # ~1.3 s of audio before the first real score
         features = np.stack(self._embeddings)[None, :, :].astype(np.float32)
         return float(np.squeeze(self._ww.run(None, {self._ww_in: features})[0]))
+
+
+class _SilenceGate:
+    """Skips the models while the room is quiet -- that is most of the time
+    Jarvis sleeps. Quiet chunks are only buffered; the first loud one replays
+    the last ~2 s through the detector first, so the mel/embedding windows are
+    exactly what continuous scoring would have had and "Hey Jarvis" is caught
+    just as well. The noise floor adapts (drops fast, rises slowly), so a
+    humming fan doesn't keep the models running."""
+
+    _PREROLL = _MEL_WINDOW // 8 + _N_EMBEDDINGS + 2   # ~2.2 s: mel context + 16 embeddings
+    _HANGOVER = 20                                     # keep scoring 1.6 s after the last loud chunk
+
+    def __init__(self) -> None:
+        import numpy as np
+
+        self._np = np
+        self._min_rms = config.WAKE_WORD_GATE_RMS
+        self._floor = max(self._min_rms, 1.0)
+        self._buffer: deque = deque(maxlen=self._PREROLL)
+        self._active = 0
+
+    def feed(self, frames) -> list:
+        np = self._np
+        chunk = np.asarray(frames, dtype=np.int16).reshape(-1)
+        if self._min_rms <= 0:
+            return [chunk]                          # gate turned off
+        rms = float(np.sqrt(np.mean(chunk.astype(np.float32) ** 2)))
+        loud = rms > max(self._min_rms, self._floor * 2.5)
+        if not loud:
+            rate = 0.1 if rms < self._floor else 0.005
+            self._floor += (rms - self._floor) * rate
+        if loud:
+            out = list(self._buffer) + [chunk] if self._active == 0 else [chunk]
+            self._buffer.clear()
+            self._active = self._HANGOVER
+            return out
+        if self._active > 0:
+            self._active -= 1
+            return [chunk]
+        self._buffer.append(chunk)
+        return []
 
 
 def _input_device() -> int | str | None:
@@ -130,6 +172,7 @@ class WakeWordListener:
 
         detector = self._detector
         detector.reset()
+        gate = _SilenceGate()
         last_hit = 0.0
         try:
             with sd.InputStream(samplerate=SAMPLE_RATE, channels=1, dtype="int16",
@@ -137,7 +180,10 @@ class WakeWordListener:
                 logger.info("listening for wake word %r", config.WAKE_WORD_MODEL)
                 while not self._stop.is_set():
                     frames, _overflow = stream.read(CHUNK)
-                    score = detector.score(frames)
+                    chunks = gate.feed(frames)
+                    if not chunks:
+                        continue                  # silence: no model runs at all
+                    score = max(detector.score(c) for c in chunks)
                     if score >= config.WAKE_WORD_THRESHOLD and time.time() - last_hit > _COOLDOWN_S:
                         last_hit = time.time()
                         logger.info("wake word detected (score %.2f)", score)

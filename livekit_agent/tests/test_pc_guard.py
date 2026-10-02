@@ -116,7 +116,13 @@ def test_bash_rules():
 
 def test_file_writes():
     assert pc_guard.classify("Write", {"file_path": "C:\\Users\\user\\Documents\\a.docx"})[0] == ALLOW
-    assert pc_guard.classify("Edit", {"file_path": "D:\\Projects\\main.py"})[0] == ALLOW
+    # source files belong to coding_agent (the hologram), not the brain itself
+    assert pc_guard.classify("Edit", {"file_path": "D:\\Projects\\main.py"}) == (BLOCK, pc_guard.CODE_REASON)
+    assert pc_guard.classify("Write", {"file_path": "C:\\Users\\user\\Desktop\\bot\\app.js"})[1] == pc_guard.CODE_REASON
+    assert pc_guard.classify("Write", {"file_path": "C:\\Users\\user\\Desktop\\clean.ps1"})[0] == ALLOW
+    assert pc_guard.classify("Write", {"file_path": "C:\\Users\\user\\AppData\\Local\\Temp\\x\\make_docx.py"})[0] == ALLOW
+    assert pc_guard.classify("Write", {"file_path": "C:\\app\\data\\claude_workspace\\helper.py"})[0] == ALLOW
+    assert "coding_agent" in pc_guard.block_message(pc_guard.CODE_REASON)
     assert pc_guard.classify("Write", {"file_path": "C:\\Windows\\System32\\drivers\\etc\\hosts"})[0] == CONFIRM
     assert pc_guard.classify("Write", {"file_path": "C:\\Users\\user\\.ssh\\authorized_keys"})[0] == CONFIRM
     assert pc_guard.classify("WebFetch", {"url": "https://example.com"})[0] == ALLOW

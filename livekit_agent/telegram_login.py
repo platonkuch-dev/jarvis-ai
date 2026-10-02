@@ -1,17 +1,25 @@
-"""One-time interactive login for Jarvis's own (non-bot) Telegram account.
+"""One-time interactive Telegram login.
 
 Run this directly in a terminal you can type into:
 
-    python telegram_login.py
+    python telegram_login.py              # Jarvis's own (non-bot) account
+    python telegram_login.py --personal   # the owner's personal account
 
-Telegram will text/call TELEGRAM_PHONE (see .env) with a verification code --
-enter it when prompted. If the account has two-factor auth enabled, it'll
-also ask for that password. On success, the session is saved to
-config.TELEGRAM_SESSION_PATH -- tools/telegram_dm.py reuses it silently from
-then on; this script never needs to run again unless that file is deleted.
+Jarvis's account: Telegram texts/calls TELEGRAM_PHONE (see .env) with a
+verification code -- enter it when prompted. The session is saved to
+config.TELEGRAM_SESSION_PATH and reused silently from then on.
+
+--personal: asks for the owner's phone number, then the code Telegram sends
+to the owner's own app (and the 2FA password if there is one). The session
+goes to config.TELEGRAM_PERSONAL_SESSION_PATH; only chat_memory.py opens it,
+to read (never send, never mark as read) the owner's recent chats into
+Jarvis's shared memory. Deleting that file -- or ending the session under
+Telegram > Settings > Devices -- switches it off again.
 """
 
 from __future__ import annotations
+
+import sys
 
 from dotenv import load_dotenv
 
@@ -26,14 +34,20 @@ def main() -> None:
         print("Заполните TELEGRAM_API_ID и TELEGRAM_API_HASH в .env, затем запустите снова.")
         return
 
-    client = TelegramClient(
-        config.TELEGRAM_SESSION_PATH, config.TELEGRAM_API_ID, config.TELEGRAM_API_HASH
-    )
-    client.start(phone=config.TELEGRAM_PHONE or None)
+    personal = "--personal" in sys.argv
+    session = config.TELEGRAM_PERSONAL_SESSION_PATH if personal else config.TELEGRAM_SESSION_PATH
+    if personal:
+        print("Вход в ВАШ личный Telegram: Джарвис будет только читать чаты (не писать и не отмечать прочитанными),")
+        print("чтобы помнить, о чём вы переписываетесь. Отключить: Telegram > Настройки > Устройства.\n")
+    client = TelegramClient(session, config.TELEGRAM_API_ID, config.TELEGRAM_API_HASH,
+                            device_model="Jarvis AI (чтение чатов)" if personal else "Jarvis AI")
+    client.start(phone=None if personal else (config.TELEGRAM_PHONE or None))
     me = client.get_me()
     print(f"Вход выполнен: {me.first_name} (@{me.username or 'без юзернейма'}), телефон {me.phone}")
-    print(f"Сессия сохранена в {config.TELEGRAM_SESSION_PATH}.session -- дальше вход не потребуется.")
+    print(f"Сессия сохранена в {session}.session -- дальше вход не потребуется.")
     client.disconnect()
+    if sys.stdin.isatty():
+        input("\nГотово. Нажмите Enter, чтобы закрыть окно.")
 
 
 if __name__ == "__main__":

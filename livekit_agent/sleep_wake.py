@@ -18,11 +18,11 @@ import logging
 import time
 from typing import Any
 
-import keyboard
-
 import config
 import hud_bridge
+import memory_trim
 import mic_control
+from global_hotkeys import GlobalHotkeys
 from tools import runtime
 from wake_word import WakeWordListener
 
@@ -30,6 +30,8 @@ logger = logging.getLogger("jarvis-voice-agent.sleep_wake")
 
 CHECK_INTERVAL_S = 5.0
 MIC_POLL_S = 0.3
+TRIM_DELAY_S = 8.0        # let the goodbye line finish playing first
+RETRIM_EVERY_S = 900.0    # background work (Telegram, monitors) slowly pulls pages back in
 
 
 class SleepWakeController:
@@ -41,8 +43,10 @@ class SleepWakeController:
         self._loop: asyncio.AbstractEventLoop | None = None
         self._monitor_task: asyncio.Task[None] | None = None
         self._mic_task: asyncio.Task[None] | None = None
+        self._trim_task: asyncio.Task[None] | None = None
         self._muted = False
         self._wake_word = WakeWordListener(self._on_wake_word)
+        self._hotkeys = GlobalHotkeys()
 
     @property
     def asleep(self) -> bool:
@@ -60,9 +64,10 @@ class SleepWakeController:
         self._monitor_task = asyncio.create_task(self._monitor_loop(), name="sleep_wake_monitor")
         mic_control.set_muted(False)          # a fresh start always listens
         self._mic_task = asyncio.create_task(self._mic_loop(), name="mic_switch")
-        keyboard.add_hotkey(config.WAKE_HOTKEY, self._on_hotkey)
+        self._hotkeys.add(config.WAKE_HOTKEY, self._on_hotkey)
         if config.MIC_HOTKEY and config.MIC_HOTKEY.lower() != config.WAKE_HOTKEY.lower():
-            keyboard.add_hotkey(config.MIC_HOTKEY, self._on_mic_hotkey)
+            self._hotkeys.add(config.MIC_HOTKEY, self._on_mic_hotkey)
+        self._hotkeys.start()
         logger.info(
             "sleep/wake hotkey registered: %s (auto-sleep after %.0fs of silence)",
             config.WAKE_HOTKEY,
@@ -71,17 +76,13 @@ class SleepWakeController:
 
     def stop(self) -> None:
         self._wake_word.stop()
-        for task in (self._monitor_task, self._mic_task):
+        for task in (self._monitor_task, self._mic_task, self._trim_task):
             if task is not None:
                 task.cancel()
-        for key in (config.WAKE_HOTKEY, config.MIC_HOTKEY):
-            try:
-                keyboard.remove_hotkey(key)
-            except (KeyError, ValueError):
-                pass
+        self._hotkeys.stop()
 
     def _on_hotkey(self) -> None:
-        # Runs on keyboard's own listener thread; hop back onto the asyncio loop.
+        # Runs on the hotkey thread (global_hotkeys.py); hop back onto the asyncio loop.
         # Toggles: asleep -> wake, awake -> sleep immediately (not just a
         # reset of the silence timer).
         # A muted mic comes back on first (F10 is the keyboard way out of mute).
@@ -89,11 +90,12 @@ class SleepWakeController:
             if self._muted:
                 mic_control.set_muted(False)      # _mic_loop picks it up and wakes if needed
                 return
-            coro = self._wake() if self._asleep else self._sleep()
+            # F10 while awake cuts him off mid-word and drops straight into sleep, silently.
+            coro = self._wake() if self._asleep else self._sleep(announce=False, interrupt=True)
             asyncio.run_coroutine_threadsafe(coro, self._loop)
 
     def _on_mic_hotkey(self) -> None:
-        # Runs on keyboard's listener thread; _mic_loop does the actual switch and the announcement.
+        # Runs on the hotkey thread; _mic_loop does the actual switch and the announcement.
         mic_control.set_muted(not mic_control.is_muted())
 
     def _on_wake_word(self) -> None:
@@ -132,17 +134,46 @@ class SleepWakeController:
             except Exception:
                 logger.exception("mic switch tick failed")
 
-    async def _sleep(self) -> None:
+    async def _sleep(self, announce: bool = True, interrupt: bool = False) -> None:
+        if self._asleep:
+            return
         self._asleep = True
-        how = f"Нажмите {config.WAKE_HOTKEY.upper()}"
-        if self._wake_word.available:
-            how += " или скажите «Hey Jarvis»"
-        await runtime.say(f"Ухожу в спящий режим. {how}, чтобы разбудить.")
+        if interrupt:
+            # Mic off first so nothing he hears re-triggers a turn, then cut the speech
+            # (and the reply still being generated) -- queued lines included.
+            self._session.input.set_audio_enabled(False)
+            hud_bridge.write_state("sleeping", self._hud_lines)
+            try:
+                self._session.interrupt(force=True)
+            except Exception:
+                logger.debug("nothing to interrupt", exc_info=True)
+        if announce:
+            how = f"Нажмите {config.WAKE_HOTKEY.upper()}"
+            if self._wake_word.available:
+                how += " или скажите «Hey Jarvis»"
+            await runtime.say(f"Ухожу в спящий режим. {how}, чтобы разбудить.")
         self._session.input.set_audio_enabled(False)
         if not self._muted:
             self._wake_word.start()
         hud_bridge.write_state("sleeping", self._hud_lines)
-        logger.info("entered sleep mode after %.0fs of silence", config.SLEEP_AFTER_SILENCE_S)
+        logger.info("entered sleep mode (%s)", "hotkey" if interrupt else "silence")
+        if self._trim_task is None or self._trim_task.done():
+            self._trim_task = asyncio.create_task(self._sleep_lean(), name="sleep_lean")
+
+    async def _sleep_lean(self) -> None:
+        """Asleep, Jarvis shouldn't sit on RAM: stop the idle claude process
+        and hand every Jarvis process's untouched pages back to Windows,
+        again every RETRIM_EVERY_S while he stays asleep."""
+        await asyncio.sleep(TRIM_DELAY_S)
+        while self._asleep:
+            suspend = getattr(getattr(self._session, "llm", None), "suspend", None)
+            if suspend is not None:
+                try:
+                    await suspend()
+                except Exception:
+                    logger.exception("could not stop the LLM process for sleep")
+            await asyncio.to_thread(memory_trim.trim_all)
+            await asyncio.sleep(RETRIM_EVERY_S)
 
     async def _wake(self) -> None:
         self.note_activity()
@@ -150,6 +181,11 @@ class SleepWakeController:
             return
         self._asleep = False
         self._wake_word.stop()
+        if self._trim_task is not None:
+            self._trim_task.cancel()
+        resume = getattr(getattr(self._session, "llm", None), "resume", None)
+        if resume is not None:
+            asyncio.create_task(resume(), name="llm_resume")
         self._session.input.set_audio_enabled(True)
         hud_bridge.write_state("listening", self._hud_lines)
         await runtime.say("Слушаю.")

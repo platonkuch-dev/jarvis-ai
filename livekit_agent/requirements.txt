@@ -62,3 +62,4 @@ bleak>=0.22
 
 # tools/telegram_dm.py: MTProto client for a real (non-bot) Telegram account
 telethon>=1.36.0
+segno>=1.6  # QR code for the personal Telegram login in the control panel
