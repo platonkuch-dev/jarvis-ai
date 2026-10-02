@@ -3,7 +3,10 @@
 Started by tools/coding_agent.py as a detached process (the install at the end
 closes the Jarvis that started it), from the source tree's own venv:
 
-    .venv\\Scripts\\python.exe scripts\\self_release.py --job job.json
+    .venv\\Scripts\\python.exe scripts\\self_release.py --job logs\\self_release_job.json
+
+Nothing on its command line may point into the install folder: the installer
+kills every process whose command line mentions it (installer/common.py).
 
 job.json: {"task": what was asked, "summary": Claude Code's result,
            "outbox": the installed app's data/notify_outbox.jsonl,

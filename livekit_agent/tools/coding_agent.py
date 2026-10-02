@@ -159,7 +159,10 @@ def _start_self_release(task: str, summary: str) -> bool:
     if not python.is_file() or not script.is_file():
         logger.warning("self release unavailable: %s / %s missing", python, script)
         return False
-    job = config.DATA_DIR / "self_release_job.json"
+    # Not under the install folder: the installer kills every process whose
+    # command line mentions it, which would include this one.
+    job = src / "logs" / "self_release_job.json"
+    job.parent.mkdir(exist_ok=True)
     job.write_text(json.dumps({"task": task, "summary": summary, "outbox": str(notify.OUTBOX_FILE),
                                "installed_env": str(config.BASE_DIR / ".env")}, ensure_ascii=False),
                    encoding="utf-8")
