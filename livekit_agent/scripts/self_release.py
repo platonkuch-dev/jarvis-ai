@@ -52,10 +52,11 @@ class Failed(Exception):
     pass
 
 
-def run(args: list[str], *, cwd: Path = REPO, timeout: float = 600, check: bool = True) -> str:
+def run(args: list[str], *, cwd: Path = REPO, timeout: float = 600, check: bool = True,
+        env: dict[str, str] | None = None) -> str:
     logger.info("$ %s", " ".join(args))
     proc = subprocess.run(args, cwd=str(cwd), capture_output=True, timeout=timeout, creationflags=NO_WINDOW,
-                          encoding="utf-8", errors="replace")
+                          encoding="utf-8", errors="replace", env=env)
     out = (proc.stdout or "") + (proc.stderr or "")
     logger.info(out[-4000:])
     if check and proc.returncode != 0:
@@ -70,6 +71,21 @@ def find_gh() -> str:
         if candidate and Path(candidate).is_file():
             return str(candidate)
     raise Failed("не нашёл GitHub CLI (gh) — без него не могу запушить и выложить релиз")
+
+
+def gh_env(gh: str) -> dict[str, str]:
+    """Environment for `gh` with GH_TOKEN set. This script runs on the
+    Microsoft Store Python, whose child processes see a virtualized %APPDATA%
+    without gh's hosts.yml, so plain `gh release` says "not logged in" -- but
+    `gh auth git-credential` still reads the token from the Windows keyring.
+    The token stays in memory: never logged, never written."""
+    proc = subprocess.run([gh, "auth", "git-credential", "get"], input="protocol=https\nhost=github.com\n\n",
+                          capture_output=True, encoding="utf-8", errors="replace", creationflags=NO_WINDOW,
+                          timeout=60)
+    token = next((line.split("=", 1)[1] for line in proc.stdout.splitlines() if line.startswith("password=")), "")
+    if not token:
+        raise Failed("GitHub CLI не отдал токен — войдите заново командой gh auth login")
+    return dict(os.environ, GH_TOKEN=token)
 
 
 class Notifier:
@@ -186,7 +202,7 @@ def main() -> int:
         notes_file.write_text(notes, encoding="utf-8")
         run([gh, "release", "create", f"v{version}", str(setup), str(setup.with_suffix(".sha256")),
              "-R", GITHUB_REPO, "--title", f"Jarvis AI {version}", "--notes-file", str(notes_file),
-             "--target", sha, "--latest"], timeout=1800)
+             "--target", sha, "--latest"], timeout=1800, env=gh_env(gh))
         notify(f"🛠 Версия {version} выложена на GitHub и закоммичена. Устанавливаю — Джарвис перезапустится.")
 
         stage = "установка"
