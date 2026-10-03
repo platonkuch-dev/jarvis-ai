@@ -23,6 +23,7 @@ from __future__ import annotations
 
 import asyncio
 import logging
+import re
 import time
 from pathlib import Path
 
@@ -92,30 +93,68 @@ def _read_new_log_lines(log_path: Path) -> list[str]:
     return chunk.decode("utf-8", errors="replace").splitlines()
 
 
+# A record header in app.log (rich console format): "    23:51:52.450 ERROR    livekit.agents     Error in ...".
+# Long messages wrap onto heavily indented continuation lines; tracebacks
+# follow as unindented lines; JSON metadata ({"room": ..., "lk.pii.text": ...})
+# closes the record.
+_RECORD_RE = re.compile(r"^\s{0,8}\d{2}:\d{2}:\d{2}\.\d{3}\s+(DEBUG|INFO|WARNING|ERROR|CRITICAL)\s+(\S+)\s+(.*)$")
+_EXC_RE = re.compile(r"^([\w.]+(?:Error|Exception|Exit|Interrupt|Failure))\b:?\s*(.*)$")
+# Failures livekit-agents already retries or recovers from on its own (a
+# dropped STT/TTS websocket, a TTS fallback switching voices): alerting on
+# each would be noise about something that self-heals.
+_SELF_HEALING = ("retryable=True", "all TTSs are unavailable", "recovery failed", "tts returned error",
+                 "switching to next")
+
+
+def _error_records(lines: list[str]) -> list[tuple[str, list[str]]]:
+    """(header message, the record's following lines) for every ERROR/CRITICAL record."""
+    records: list[tuple[str, str, list[str]]] = []
+    for line in lines:
+        m = _RECORD_RE.match(line)
+        if m:
+            records.append((m.group(1), m.group(3).strip(), []))
+        elif records:
+            records[-1][2].append(line)
+    return [(msg, rest) for level, msg, rest in records if level in ("ERROR", "CRITICAL")]
+
+
+def _describe(header: str, rest: list[str]) -> str:
+    """One line per error: the wrapped header message plus the final
+    exception line of its traceback. Deliberately nothing else -- the
+    surrounding log carries conversation text (lk.pii.*), which has no
+    business in a monitoring alert."""
+    words = [header]
+    for line in rest:
+        text = line.strip()
+        if not text or text.startswith(("{", '"', "Traceback")) or not line.startswith(" " * 20):
+            break
+        words.append(text)
+    message = " ".join(" ".join(words).split())
+    exc = ""
+    for line in rest:
+        m = _EXC_RE.match(line.strip())
+        if m and not line.startswith(" "):
+            exc = f"{m.group(1).rsplit('.', 1)[-1]}: {m.group(2)}".strip(": ")
+    message = re.sub(r"lk\.pii\S*", "", message)
+    exc = re.sub(r"lk\.pii\S*", "", exc)
+    return (message + (f" — {exc}" if exc else ""))[:300]
+
+
 def _check_recent_errors() -> str | None:
     log_path = config.LOGS_DIR / "app.log"
     if not log_path.exists():
         return None
-    window = _read_new_log_lines(log_path)[-config.MONITOR_LOG_ERROR_WINDOW :]
-
-    blob = "\n".join(window)
-    if not ("ERROR" in blob or "Traceback" in blob):
+    found: list[str] = []
+    for header, rest in _error_records(_read_new_log_lines(log_path)):
+        if any(marker in header or any(marker in line for line in rest) for marker in _SELF_HEALING):
+            continue
+        text = _describe(header, rest)
+        if text not in found:
+            found.append(text)
+    if not found:
         return None
-    # STT/TTS providers drop their websocket occasionally under normal
-    # network conditions -- livekit-agents already retries these itself
-    # (that's what retryable=True means), so alerting on every one would
-    # just be noise about something that self-heals. Only a traceback
-    # WITHOUT that marker is a real, unhandled problem worth a message.
-    if "retryable=True" in blob:
-        return None
-
-    # The log's rich-console formatting wraps long lines across several
-    # physical ones, so "the last matching line" is often just the
-    # "Traceback (most recent call last):" header, not the actual
-    # exception. Send a real chunk of context instead of guessing which
-    # single line matters.
-    preview = "\n".join(window[-12:])[-500:]
-    return f"В логе Джарвиса новая необработанная ошибка:\n{preview}"
+    more = f"\n…и ещё {len(found) - 3}" if len(found) > 3 else ""
+    return "В логе Джарвиса новая ошибка:\n" + "\n".join(f"• {t}" for t in found[:3]) + more
 
 
 _CHECKS = [_check_disk, _check_memory, _check_recent_errors]

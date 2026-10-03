@@ -92,6 +92,18 @@ class ChunkedStream(tts.ChunkedStream):
         self._opts = replace(tts._opts)
 
     async def _run(self, output_emitter: tts.AudioEmitter) -> None:
+        # A segment with nothing to pronounce (" .", "—", an emoji left over
+        # after the sentence splitter) makes Edge answer NoAudioReceived; the
+        # FallbackAdapter then marked Edge dead -- and kept failing its
+        # recovery on the same " ." -- so with ElevenLabs down Jarvis went
+        # silent. Nothing to say is not an error: a 20 ms beat of silence
+        # (livekit requires at least one frame for non-empty text).
+        if not any(ch.isalnum() for ch in self.input_text):
+            output_emitter.initialize(request_id=uuid.uuid4().hex, sample_rate=SAMPLE_RATE,
+                                      num_channels=NUM_CHANNELS, mime_type="audio/pcm")
+            output_emitter.push(bytes(SAMPLE_RATE // 50 * 2 * NUM_CHANNELS))
+            output_emitter.flush()
+            return
         output_emitter.initialize(
             request_id=uuid.uuid4().hex,
             sample_rate=SAMPLE_RATE,

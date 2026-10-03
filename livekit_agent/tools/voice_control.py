@@ -19,6 +19,30 @@ from tools._logging import log_call
 from tools.registry import register_impl, register_tool
 
 
+async def voice_exists(voice_id: str) -> bool | None:
+    """Whether `voice_id` is still in the ElevenLabs account: True/False, or
+    None when it can't be told (no key, no network, a key without the
+    voices_read permission) -- callers only act on a definite False.
+
+    A voice deleted on the ElevenLabs side made every reply fail with
+    voice_id_does_not_exist until someone noticed and switched voices."""
+    if not voice_id or not config.ELEVENLABS_API_KEY:
+        return None
+    import httpx
+
+    try:
+        async with httpx.AsyncClient(timeout=5) as http:
+            r = await http.get(f"https://api.elevenlabs.io/v1/voices/{voice_id}",
+                               headers={"xi-api-key": config.ELEVENLABS_API_KEY})
+    except httpx.HTTPError:
+        return None
+    if r.status_code == 200:
+        return True
+    if r.status_code in (400, 404) and ("not_found" in r.text or "does not exist" in r.text):
+        return False
+    return None
+
+
 def _persist_voice(voice_id: str, voice_name: str) -> None:
     config.TTS_VOICE_STATE_FILE.write_text(
         json.dumps({"voice_id": voice_id, "voice_name": voice_name}, ensure_ascii=False),
@@ -47,6 +71,13 @@ async def _change_voice(*, voice_name: str) -> dict:
         return {
             "status": "error",
             "message": f"Не знаю голос «{voice_name}». Доступные: {', '.join(presets)}.",
+        }
+
+    if await voice_exists(voice_id) is False:
+        return {
+            "status": "error",
+            "message": f"Голоса «{voice_name}» больше нет в аккаунте ElevenLabs — "
+                       "удалите или обновите его в панели управления (раздел «Голоса»).",
         }
 
     session = runtime.get_active_session()

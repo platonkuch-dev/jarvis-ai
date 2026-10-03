@@ -251,7 +251,23 @@ def _build_stt(vad):
     return stt.FallbackAdapter([primary, backup], vad=vad)
 
 
-def _build_tts():
+async def _usable_voice_id() -> str | None:
+    """The persisted voice (else ELEVENLABS_VOICE_ID), skipping one that was
+    deleted from the ElevenLabs account -- it failed every reply."""
+    from tools.voice_control import voice_exists
+
+    persisted = _persisted_voice_id()
+    if persisted and await voice_exists(persisted) is False:
+        logger.warning("saved voice %s no longer exists in ElevenLabs -- using the default voice", persisted)
+        try:
+            config.TTS_VOICE_STATE_FILE.unlink()
+        except OSError:
+            pass
+        persisted = None
+    return persisted or config.ELEVENLABS_VOICE_ID or None
+
+
+def _build_tts(voice_id: str | None = None):
     if config.TTS_PROVIDER == "elevenlabs":
         # api_key passed explicitly: the plugin's own env fallback is
         # ELEVEN_API_KEY, not ELEVENLABS_API_KEY, so it wouldn't pick up
@@ -268,7 +284,7 @@ def _build_tts():
                 use_speaker_boost=True,
             ),
         }
-        voice_id = _persisted_voice_id() or config.ELEVENLABS_VOICE_ID
+        voice_id = voice_id or _persisted_voice_id() or config.ELEVENLABS_VOICE_ID
         if voice_id:
             kwargs["voice_id"] = voice_id
         # Edge as the backup voice: a rejected key, an empty ElevenLabs
@@ -349,7 +365,7 @@ async def entrypoint(ctx: JobContext) -> None:
     session: AgentSession = AgentSession(
         stt=_build_stt(ctx.proc.userdata["vad"]),
         llm=_build_llm(agent.instructions, mcp_server=mcp_server, restricted=restricted),
-        tts=_build_tts(),
+        tts=_build_tts(await _usable_voice_id() if config.TTS_PROVIDER == "elevenlabs" else None),
         vad=ctx.proc.userdata["vad"],
         **session_kwargs,
     )
