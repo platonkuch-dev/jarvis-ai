@@ -16,6 +16,7 @@ from collections.abc import Awaitable, Callable
 from typing import Any, TypeVar
 
 from config import DATA_DIR, LOG_MAX_BYTES, TOOL_LOG_FILE
+from atomic_io import atomic_write_text
 
 # The last tool call and whether it's still running -- the HUD lights up the neuron of that block.
 ACTIVITY_FILE = DATA_DIR / "tool_activity.json"
@@ -36,9 +37,7 @@ def _write(entry: dict[str, Any]) -> None:
 
 def _note_activity(tool_name: str, started: float, done: bool) -> None:
     try:
-        tmp = ACTIVITY_FILE.with_suffix(".tmp")
-        tmp.write_text(json.dumps({"tool": tool_name, "at": started, "done": done}), encoding="utf-8")
-        os.replace(tmp, ACTIVITY_FILE)
+        atomic_write_text(ACTIVITY_FILE, json.dumps({"tool": tool_name, "at": started, "done": done}))
     except OSError:
         pass
 
@@ -71,7 +70,10 @@ def log_call(tool_name: str) -> Callable[[_F], _F]:
             _note_activity(tool_name, started, False)
             try:
                 result = await fn(*args, **kwargs)
-                entry["ok"] = True
+                # Most tools report failure as {"status": "error"} instead of
+                # raising -- count that as a failed call, or the log says
+                # every launch/LED/AE call "succeeded" while it didn't.
+                entry["ok"] = not (isinstance(result, dict) and result.get("status") == "error")
                 entry["result"] = result
                 _note_pattern_learning(tool_name)
                 return result

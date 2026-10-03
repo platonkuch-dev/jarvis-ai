@@ -27,7 +27,7 @@ from livekit.agents import (
     cli,
 )
 from livekit import rtc
-from livekit.agents import llm
+from livekit.agents import llm, stt, tts
 from livekit.plugins import anthropic, deepgram, elevenlabs, openai as openai_plugin, silero
 
 import config
@@ -238,6 +238,19 @@ async def _pin_ollama_model() -> None:
         logger.warning("ollama is not reachable at %s -- is it running?", root, exc_info=True)
 
 
+def _build_stt(vad):
+    """Deepgram, with OpenAI transcription as the backup ear when an OpenAI
+    key is set: a Deepgram outage or an empty Deepgram balance used to leave
+    Jarvis deaf ("failed to recognize speech" until restart). The backup
+    costs nothing while Deepgram is healthy -- it is only called on failure."""
+    primary = deepgram.STT(model=config.DEEPGRAM_MODEL, language=config.DEEPGRAM_LANGUAGE)
+    if not config.OPENAI_API_KEY:
+        return primary
+    backup = openai_plugin.STT(model="gpt-4o-mini-transcribe", language=config.DEEPGRAM_LANGUAGE,
+                               api_key=config.OPENAI_API_KEY, use_realtime=False)
+    return stt.FallbackAdapter([primary, backup], vad=vad)
+
+
 def _build_tts():
     if config.TTS_PROVIDER == "elevenlabs":
         # api_key passed explicitly: the plugin's own env fallback is
@@ -258,7 +271,12 @@ def _build_tts():
         voice_id = _persisted_voice_id() or config.ELEVENLABS_VOICE_ID
         if voice_id:
             kwargs["voice_id"] = voice_id
-        return elevenlabs.TTS(**kwargs)
+        # Edge as the backup voice: a rejected key, an empty ElevenLabs
+        # balance or a deleted voice_id used to leave Jarvis mute (only
+        # "failed to synthesize speech" in the log); now he keeps talking
+        # in the free voice and switches back once ElevenLabs recovers.
+        edge = EdgeTTS(voice=config.TTS_VOICE, rate=config.TTS_RATE, volume=config.TTS_VOLUME, pitch=config.TTS_PITCH)
+        return tts.FallbackAdapter([elevenlabs.TTS(**kwargs), edge], max_retry_per_tts=1)
     return EdgeTTS(
         voice=config.TTS_VOICE, rate=config.TTS_RATE, volume=config.TTS_VOLUME, pitch=config.TTS_PITCH
     )
@@ -329,7 +347,7 @@ async def entrypoint(ctx: JobContext) -> None:
         session_kwargs["turn_handling"] = {"preemptive_generation": {"enabled": False}}
 
     session: AgentSession = AgentSession(
-        stt=deepgram.STT(model=config.DEEPGRAM_MODEL, language=config.DEEPGRAM_LANGUAGE),
+        stt=_build_stt(ctx.proc.userdata["vad"]),
         llm=_build_llm(agent.instructions, mcp_server=mcp_server, restricted=restricted),
         tts=_build_tts(),
         vad=ctx.proc.userdata["vad"],

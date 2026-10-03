@@ -114,7 +114,9 @@ class SleepWakeController:
         while True:
             await asyncio.sleep(MIC_POLL_S)
             try:
-                muted = mic_control.is_muted()
+                # Off the loop: a file read stalled by antivirus/disk spin-up
+                # blocked audio for up to 2 s here.
+                muted = await asyncio.to_thread(mic_control.is_muted)
                 if muted == self._muted:
                     continue
                 self._muted = muted

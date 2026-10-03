@@ -14,9 +14,15 @@ Escalating strategy, fastest/most reliable first:
        register their main executable even without adding it to PATH.
     4. An indexed Start Menu .lnk shortcut (covers almost everything else:
        Discord, Spotify, WhatsApp, Telegram, most Electron apps).
-    5. Last resort: type the name into the Start Menu search and press
-       Enter -- the widest possible net, since it's the same search a human
-       would use.
+    5. The shell's own app list (Get-StartApps / shell:AppsFolder): the only
+       place Store/UWP apps (Paint, Calculator, Notepad on Win11), Steam
+       games (steam://rungameid/...) and localized names ("Диспетчер задач")
+       show up -- none of them have a Start Menu .lnk.
+    6. Last resort, only if that list couldn't be read: type the name into
+       the Start Menu search and press Enter.
+
+Web services ("YouTube", "Gmail", "vk.com") aren't programs at all -- they
+open in the default browser instead of failing as "not installed".
 
 Every step verifies a real new process actually appeared (via psutil) before
 declaring success, and remembers already-open apps so a second "open X"
@@ -26,7 +32,9 @@ just focuses them instead of waiting for a process that will never spawn.
 from __future__ import annotations
 
 import asyncio
+import json
 import os
+import re
 import shutil
 import subprocess
 import threading
@@ -40,15 +48,44 @@ import config
 _SYSTEM = config.SYSTEM
 
 
+def _contains_words(haystack: str, needle: str) -> bool:
+    """Whole-word containment: "google chrome browser" contains "google
+    chrome", but "paint.net" does not contain "paint" (a raw substring check
+    would turn Paint.NET into mspaint)."""
+    hay, words = haystack.split(), needle.split()
+    n = len(words)
+    return any(hay[i:i + n] == words for i in range(len(hay) - n + 1))
+
+
 def _normalize(raw: str) -> str:
     key = raw.lower().strip()
     entry = config.APP_ALIASES.get(key)
     if entry is not None:
         return entry.get(_SYSTEM, raw)
     for alias_key, os_map in config.APP_ALIASES.items():
-        if alias_key in key or key in alias_key:
+        if _contains_words(key, alias_key):
             return os_map.get(_SYSTEM, raw)
     return raw
+
+
+def _squash(name: str) -> str:
+    """"Counter-Strike 2" / "counter strike" -> "counterstrike2" / "counterstrike"."""
+    return re.sub(r"[\W_]+", "", name.lower())
+
+
+def _web_url(app_name: str) -> str | None:
+    """URL for a web service the user called an "app", or None."""
+    key = app_name.lower().strip()
+    url = config.WEB_APP_URLS.get(key)
+    if url:
+        return url
+    for site, site_url in config.WEB_APP_URLS.items():
+        if _contains_words(key, site):
+            return site_url
+    # "vk.com", "habr.com" -- a bare domain, no spaces, not a local file.
+    if re.fullmatch(r"[\w-]+(\.[\w-]+)*\.[a-zа-я]{2,}", key) and not key.endswith(".exe"):
+        return "https://" + key
+    return None
 
 
 def _snapshot_process_names() -> set[str]:
@@ -143,9 +180,11 @@ def build_app_index() -> int:
                 index.setdefault(lnk.stem.lower().replace(" ", ""), str(lnk))
         except Exception:
             continue
-    global _app_index
+    global _app_index, _start_apps
     with _app_index_lock:
         _app_index = index
+    if _SYSTEM == "Windows":
+        _start_apps = _load_start_apps()
     return len(index)
 
 
@@ -180,6 +219,82 @@ def _find_start_menu_shortcut(app_name: str) -> str | None:
     return best_partial
 
 
+# The shell's own list of launchable apps -- what the Start Menu "All apps"
+# view shows: name -> AppUserModelID (or a steam:// URL for Steam games).
+# None until loaded; [] if PowerShell couldn't produce it.
+_start_apps: list[tuple[str, str, str]] | None = None  # (squashed name, name, app id)
+
+
+def _load_start_apps() -> list[tuple[str, str, str]]:
+    script = (
+        "[Console]::OutputEncoding=[Text.Encoding]::UTF8;"
+        "Get-StartApps | Select-Object Name,AppID | ConvertTo-Json -Compress"
+    )
+    try:
+        out = subprocess.run(
+            ["powershell", "-NoProfile", "-NonInteractive", "-Command", script],
+            capture_output=True, timeout=20,
+            creationflags=getattr(subprocess, "CREATE_NO_WINDOW", 0),
+        ).stdout.decode("utf-8", errors="replace")
+        rows = json.loads(out or "[]")
+    except Exception:
+        return []
+    if isinstance(rows, dict):
+        rows = [rows]
+    apps = []
+    for row in rows:
+        name, app_id = (row.get("Name") or "").strip(), (row.get("AppID") or "").strip()
+        if name and app_id:
+            apps.append((_squash(name), name, app_id))
+    return apps
+
+
+def _ensure_start_apps() -> list[tuple[str, str, str]]:
+    global _start_apps
+    if _start_apps is None:
+        _start_apps = _load_start_apps() if _SYSTEM == "Windows" else []
+    return _start_apps
+
+
+def _find_start_app(app_name: str) -> tuple[str, str] | None:
+    """(display name, app id) of the best Start-apps match: exact name, then
+    a name starting with the query ("counter strike" -> "Counter-Strike 2"),
+    then any name containing it. Partial matches need >= 3 letters so "w"
+    doesn't launch whatever app sorts first."""
+    term = _squash(app_name)
+    if not term:
+        return None
+    apps = _ensure_start_apps()
+    for squashed, name, app_id in apps:
+        if squashed == term:
+            return name, app_id
+    if len(term) < 3:
+        return None
+    for test in (lambda sq: sq.startswith(term), lambda sq: term in sq):
+        hits = [(len(sq), name, app_id) for sq, name, app_id in apps if test(sq)]
+        if hits:
+            _, name, app_id = min(hits)
+            return name, app_id
+    return None
+
+
+def _launch_start_app(app_id: str) -> bool:
+    """Activate an app by its AppUserModelID exactly as clicking it in Start
+    does. Not verified via psutil: Store apps run under names unrelated to
+    their title (Calculator -> CalculatorApp.exe) and Steam games start
+    after Steam's own delay -- the id comes from the shell's list of
+    installed apps, so activation itself is the reliable signal."""
+    try:
+        if "://" in app_id:
+            os.startfile(app_id)  # type: ignore[attr-defined]
+        else:
+            subprocess.Popen(["explorer.exe", f"shell:AppsFolder\\{app_id}"],
+                             stdout=subprocess.DEVNULL, stderr=subprocess.DEVNULL)
+        return True
+    except Exception:
+        return False
+
+
 # Remembers which resolution method worked for an app name last time, so a
 # repeat launch skips straight to it instead of re-trying PATH -> registry ->
 # Start Menu scan -> Start Menu search from scratch. Cleared the moment a
@@ -196,6 +311,8 @@ def _launch_via_cache(method: str, target: str, before: set[str], app_name: str)
             # (an LLM/voice-derived string) to cmd.exe for interpretation. See
             # _launch_windows() below for why that distinction matters.
             subprocess.Popen([target], stdout=subprocess.DEVNULL, stderr=subprocess.DEVNULL)
+        elif method == "appsfolder":
+            return _launch_start_app(target)
         else:  # "startfile" -- a resolved App Paths registry value or Start Menu .lnk
             os.startfile(target)  # type: ignore[attr-defined]
         return _wait_for_new_process(before, app_name)
@@ -236,6 +353,15 @@ def _launch_windows(app_name: str) -> bool:
         except Exception:
             pass
 
+    # Shell URIs: "ms-settings:", "ms-windows-store:" -- they open a window
+    # owned by an unrelated process, so there's nothing to wait for.
+    if re.fullmatch(r"[a-z][a-z0-9.+-]+:[^\\/]*", app_name.lower()):
+        try:
+            os.startfile(app_name)  # type: ignore[attr-defined]
+            return True
+        except Exception:
+            pass
+
     if ":" in app_name:
         # Was `subprocess.Popen(f"start {app_name}", shell=True)` -- shell=True
         # runs this through cmd.exe, which treats '&', '|', '&&' etc. as command
@@ -251,6 +377,11 @@ def _launch_windows(app_name: str) -> bool:
         except Exception:
             pass
 
+    start_app = _find_start_app(app_name)
+    if start_app and _launch_start_app(start_app[1]):
+        _resolution_cache[cache_key] = ("appsfolder", start_app[1])
+        return True
+
     shortcut = _find_start_menu_shortcut(app_name)
     if shortcut:
         try:
@@ -261,8 +392,12 @@ def _launch_windows(app_name: str) -> bool:
         except Exception:
             pass
 
-    # Last resort: simulate typing into Start Menu search -- slower and less
-    # precise, but the widest net: if the OS's own search can find it, so will this.
+    # Last resort: simulate typing into Start Menu search. Only when the
+    # shell's app list couldn't be read -- if it could, Start search would
+    # find nothing more, and typing a non-app name there just opens a Bing
+    # search in Edge (or types into whatever window has focus).
+    if _ensure_start_apps():
+        return False
     try:
         import pyautogui
 
@@ -334,6 +469,11 @@ def _launch_linux(app_name: str) -> bool:
     return False
 
 
+def _installed_exactly(app_name: str) -> bool:
+    term = _squash(app_name)
+    return any(sq == term for sq, _, _ in _ensure_start_apps())
+
+
 _OS_LAUNCHERS = {"Windows": _launch_windows, "Darwin": _launch_macos, "Linux": _launch_linux}
 
 
@@ -343,6 +483,15 @@ def _launch_sync(app_name: str) -> tuple[bool, str]:
         return False, f"Неподдерживаемая ОС: {_SYSTEM}"
 
     normalized = _normalize(app_name)
+
+    # A web service ("YouTube", "Gmail") -- unless an app by that exact name
+    # is installed (a Chrome/Edge PWA), it lives in the browser.
+    url = _web_url(app_name)
+    if url and not _installed_exactly(app_name):
+        import webbrowser
+
+        if webbrowser.open(url):
+            return True, f"Открываю {app_name} в браузере."
 
     if launcher(normalized):
         return True, f"Открываю {app_name}."

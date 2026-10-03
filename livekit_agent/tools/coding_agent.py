@@ -295,7 +295,7 @@ async def _coding_agent(*, action: str, project: str = "", task: str = "") -> di
     if action == "stop":
         import code_feed
 
-        if code_feed.request_stop():
+        if code_feed.is_running() and code_feed.request_stop():
             return {"status": "ok", "message": "Останавливаю Клод Код."}
         return {"status": "ok", "message": "Клод Код сейчас ничего не делает."}
     if not project:
@@ -306,7 +306,7 @@ async def _coding_agent(*, action: str, project: str = "", task: str = "") -> di
         import code_feed
 
         busy = code_feed.read()
-        if busy.get("active"):
+        if code_feed.is_running():
             return {"status": "busy", "message": f"Клод Код ещё работает над «{busy.get('project')}». "
                                                  "Дождись или скажи «стоп», потом дам новую задачу."}
     result = await asyncio.to_thread(_run, action, project, task)

@@ -31,6 +31,7 @@ import sys
 from pathlib import Path
 
 import config
+from atomic_io import atomic_write_text
 
 logger = logging.getLogger("jarvis-voice-agent.memory_sync")
 
@@ -95,9 +96,7 @@ def _load_state() -> dict:
 
 
 def _save_state(state: dict) -> None:
-    tmp = STATE_FILE.with_suffix(".tmp")
-    tmp.write_text(json.dumps(state, ensure_ascii=False, indent=1), encoding="utf-8")
-    tmp.replace(STATE_FILE)
+    atomic_write_text(STATE_FILE, json.dumps(state, ensure_ascii=False, indent=1))
 
 
 def _parse_facts(text: str) -> dict:

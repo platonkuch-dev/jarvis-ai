@@ -349,13 +349,24 @@ async def _exec(page, name: str, args: dict, values: dict[str, str]) -> str:
             await el.fill(text, timeout=5000)
         if args.get("submit"):
             await el.press("Enter")
-        shown = "(пароль)" if "{{random:password" in args["text"] else f"«{text[:40]}»"
+        is_password = "{{random:password" in args["text"]
+        if not is_password and await el.evaluate("e => (e.type || '').toLowerCase() === 'password'"):
+            # A password the model made up itself: keep it out of the step
+            # trace, but record it with the generated values so the user can
+            # still find it (same place as {{random:password}} ones).
+            is_password = True
+            values.setdefault("password" if "password" not in values else f"password_{len(values)}", text)
+        shown = "(пароль)" if is_password else f"«{text[:40]}»"
         return f"ввёл {shown} в {args['id']}" + (" + Enter" if args.get("submit") else "")
     if name == "select":
         picked = await _select(page, loc(), args["option"])
         return f"выбрал «{picked}» в {args['id']}"
     if name == "press":
-        await page.keyboard.press(args["key"])
+        # The model sometimes sends a sequence ("ArrowDown ArrowDown Enter");
+        # Playwright takes one key or chord per call.
+        keys = args["key"].split()
+        for key in keys[:20]:
+            await page.keyboard.press(key)
         return f"нажал {args['key']}"
     if name == "scroll":
         await page.mouse.wheel(0, 700 if args.get("direction", "down") == "down" else -700)

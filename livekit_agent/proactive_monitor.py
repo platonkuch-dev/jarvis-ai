@@ -23,7 +23,6 @@ from __future__ import annotations
 
 import asyncio
 import logging
-import shutil
 import time
 from pathlib import Path
 
@@ -35,6 +34,7 @@ load_dotenv()
 import config
 import notify
 import telegram_owner
+import tg_session
 from telethon import TelegramClient
 
 logging.basicConfig(level=logging.INFO)
@@ -133,16 +133,10 @@ async def main() -> None:
         logger.error("TELEGRAM_API_ID/TELEGRAM_API_HASH not set -- see .env")
         return
 
-    monitor_session = Path(config.TELEGRAM_MONITOR_SESSION_PATH + ".session")
-    main_session = Path(config.TELEGRAM_SESSION_PATH + ".session")
-    if not monitor_session.exists() and main_session.exists():
-        shutil.copyfile(main_session, monitor_session)
-        logger.info("bootstrapped monitor session from the main Telegram session")
-
     client = TelegramClient(
-        config.TELEGRAM_MONITOR_SESSION_PATH, config.TELEGRAM_API_ID, config.TELEGRAM_API_HASH
+        tg_session.own_copy(config.TELEGRAM_MONITOR_SESSION_PATH), config.TELEGRAM_API_ID, config.TELEGRAM_API_HASH
     )
-    await client.connect()
+    await tg_session.connect_with_retry(client)
 
     logger.info("proactive monitor running, checks every %.0fs, outbox every %.0fs",
                 config.MONITOR_CHECK_INTERVAL_S, _OUTBOX_INTERVAL_S)

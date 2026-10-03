@@ -8,6 +8,7 @@ process); these tools only open/close the window. Nothing here calls an LLM.
 from __future__ import annotations
 
 import asyncio
+from datetime import datetime, timedelta
 
 from livekit.agents import RunContext, function_tool
 
@@ -15,6 +16,40 @@ import dayplan_data
 import hud_panel
 from tools._logging import log_call
 from tools.registry import register_impl, register_tool
+
+_RELATIVE_DAY_OFFSETS = {"сегодня": 0, "сейчас": 0, "завтра": 1, "послезавтра": 2, "вчера": -1, "позавчера": -2}
+_WEEKDAY_WORDS = {
+    "понедельник": 0, "вторник": 1, "среда": 2, "среду": 2, "четверг": 3,
+    "пятница": 4, "пятницу": 4, "суббота": 5, "субботу": 5, "воскресенье": 6, "воскресение": 6,
+    "monday": 0, "tuesday": 1, "wednesday": 2, "thursday": 3, "friday": 4, "saturday": 5, "sunday": 6,
+}
+_WEEKDAY_LABELS_ACC = ["понедельник", "вторник", "среду", "четверг", "пятницу", "субботу", "воскресенье"]
+
+
+def _day_offset(day: str) -> int | None:
+    """Free-form day word -> offset in days from today (0 = today, 1 =
+    tomorrow, -1 = yesterday...). A weekday name resolves to its next
+    occurrence, counting today itself (so asking for today's own weekday
+    gives 0, not +7). None if the word isn't recognised."""
+    text = (day or "").strip().lower().replace("ё", "е")
+    for prefix in ("на ", "в ", "до "):
+        if text.startswith(prefix):
+            text = text[len(prefix):]
+    if not text:
+        return 0
+    if text in _RELATIVE_DAY_OFFSETS:
+        return _RELATIVE_DAY_OFFSETS[text]
+    if text in _WEEKDAY_WORDS:
+        return (_WEEKDAY_WORDS[text] - datetime.now().weekday()) % 7
+    return None
+
+
+def _day_label(offset: int) -> str:
+    """offset -> a short Russian phrase for the spoken reply."""
+    named = {0: "сегодня", 1: "завтра", -1: "вчера", 2: "послезавтра", -2: "позавчера"}
+    if offset in named:
+        return named[offset]
+    return _WEEKDAY_LABELS_ACC[(datetime.now() + timedelta(days=offset)).weekday()]
 
 
 def _minimize_windows_on(monitor: int) -> int:
@@ -56,6 +91,8 @@ def _minimize_windows_on(monitor: int) -> int:
 async def _show_day_plan(*, monitor: int = 2) -> dict:
     import config
     import screens
+
+    await asyncio.to_thread(hud_panel.set_plan_day, 0)          # "show the plan" always means today
 
     if config.HUD_WALLPAPER:
         count = len(await asyncio.to_thread(screens.monitors))
@@ -102,6 +139,7 @@ async def show_day_plan(context: RunContext, monitor: int = 2) -> str:
 @log_call("close_day_plan")
 async def _close_day_plan() -> dict:
     await asyncio.to_thread(hud_panel.set_plan, False)
+    await asyncio.to_thread(hud_panel.set_plan_day, 0)          # next time it opens, it's today again
     return {"status": "ok", "message": "План убрал."}
 
 
@@ -110,6 +148,50 @@ async def _close_day_plan() -> dict:
 async def close_day_plan(context: RunContext) -> str:
     """Fold the day plan away inside the panel; Jarvis's face stays ("закрой план", "убери план")."""
     result = await _close_day_plan()
+    return result["message"]
+
+
+@register_impl("switch_day_plan")
+@log_call("switch_day_plan")
+async def _switch_day_plan(*, day: str = "сегодня", monitor: int = 2) -> dict:
+    import config
+
+    offset = _day_offset(day)
+    if offset is None:
+        return {"status": "error", "message": f"Не понял, какой день — «{day}»."}
+
+    if not config.HUD_WALLPAPER:
+        try:
+            if not await asyncio.to_thread(hud_panel.is_open):
+                await asyncio.to_thread(hud_panel.open_panel, monitor)
+            await asyncio.to_thread(hud_panel.set_plan, True)
+        except Exception as exc:
+            return {"status": "error", "message": f"Не удалось открыть панель: {exc}"}
+    await asyncio.to_thread(hud_panel.set_plan_day, offset)
+
+    data = await asyncio.to_thread(dayplan_data.collect, offset)
+    n = len(data["events"])
+    events = f"событий: {n}" if n else "событий нет"
+    return {"status": "ok", "message": f"План переключил на {_day_label(offset)}: {events}."}
+
+
+@register_tool
+@function_tool
+async def switch_day_plan(context: RunContext, day: str = "сегодня", monitor: int = 2) -> str:
+    """Switch which day's events the day-plan ring/list shows -- opens the
+    panel first if it isn't already open. Use whenever a specific day is
+    named: "покажи план на понедельник", "план на завтра", "переключи на
+    вчера", "а что на среду". For just today's plan, show_day_plan already
+    does that.
+
+    Args:
+        day: Which day to show -- "сегодня"/"завтра"/"вчера"/"послезавтра"/
+            "позавчера", or a weekday name ("понедельник".."воскресенье"); a
+            weekday resolves to its next occurrence, counting today itself.
+        monitor: 2 = second monitor (default), 1 = main monitor -- only used
+            if the panel needs opening.
+    """
+    result = await _switch_day_plan(day=day, monitor=monitor)
     return result["message"]
 
 

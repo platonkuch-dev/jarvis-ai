@@ -54,6 +54,20 @@ def _jsx_record_sep() -> str:
     return _jsx_string(_RECORD_SEP)
 
 
+def _fields(result: str, count: int) -> list[str]:
+    """Split a _FIELD_SEP-joined ExtendScript result into exactly `count`
+    fields. CEP hands back an empty string (or a bare error text) when the
+    script was interrupted -- a modal dialog, a long render, AE busy -- and
+    a plain tuple-unpack then surfaced as the meaningless "not enough values
+    to unpack (expected 3, got 1)"."""
+    parts = (result or "").split(_FIELD_SEP, count - 1)
+    if len(parts) != count:
+        shown = (result or "").strip()[:200] or "пустой ответ"
+        raise RuntimeError(f"After Effects вернул неожиданный ответ ({shown}) -- возможно, "
+                           "открыт диалог или программа занята. Проверьте окно After Effects.")
+    return parts
+
+
 async def _eval(script: str) -> str:
     return await client.eval_script(AFTER_EFFECTS_PORT, script)
 
@@ -83,7 +97,7 @@ async def _get_info() -> str:
             return file + {_jsx_field_sep()} + proj.items.length + {_jsx_field_sep()} + activeName;
         }})();
     """)
-    file, item_count, active_name = result.split(_FIELD_SEP, 2)
+    file, item_count, active_name = _fields(result, 3)
     lines = [
         f"Проект: {file or '(не сохранён)'}",
         f"Элементов в проекте: {item_count}",
@@ -228,7 +242,7 @@ async def _animate_property(
             return layer.name + {_jsx_field_sep()} + prop.name + {_jsx_field_sep()} + prop.numKeys;
         }})();
     """)
-    layer, prop_name, num_keys = result.split(_FIELD_SEP)
+    layer, prop_name, num_keys = _fields(result, 3)
     return f"Анимация «{prop_name}» на слое «{layer}»: {num_keys} ключевых кадров."
 
 
@@ -311,7 +325,7 @@ async def _add_effect(comp_name: str, layer_name: str, effect_name: str, params:
             return layer.name + {_jsx_field_sep()} + effect.name + {_jsx_field_sep()} + failed.join({_jsx_record_sep()});
         }})();
     """)
-    layer, effect, failed = result.split(_FIELD_SEP)
+    layer, effect, failed = _fields(result, 3)
     message = f"Эффект «{effect}» добавлен на слой «{layer}»."
     if failed:
         message += f" Не удалось установить параметры: {failed.split(_RECORD_SEP)}."
@@ -393,7 +407,7 @@ async def _set_expression(comp_name: str, layer_name: str, property_name: str, e
             return prop.name + {_jsx_field_sep()} + (prop.expressionError || "");
         }})();
     """)
-    prop_name, error = result.split(_FIELD_SEP, 1)
+    prop_name, error = _fields(result, 2)
     if error:
         raise RuntimeError(f"Expression отклонён After Effects: {error}")
     return f"Expression установлен на «{prop_name}» (слой «{layer_name}»)."
@@ -442,7 +456,7 @@ async def _render() -> str:
     """, timeout=600.0)
     if result == "empty":
         return "Очередь рендеринга пуста -- сначала добавьте композицию (add_to_render_queue)."
-    total, failed_raw = result.split(_FIELD_SEP, 1)
+    total, failed_raw = _fields(result, 2)
     failed = failed_raw.split(_RECORD_SEP) if failed_raw else []
     if failed:
         return f"Рендеринг завершён: {total} элемент(ов), из них с ошибкой: {', '.join(failed)}."
@@ -592,7 +606,7 @@ async def _set_3d(comp_name: str, layer_name: str, enabled: bool) -> str:
             return layer.name + {_jsx_field_sep()} + layer.threeDLayer;
         }})();
     """)
-    layer, state = result.split(_FIELD_SEP)
+    layer, state = _fields(result, 2)
     return f"3D для слоя «{layer}»: {'включено' if state == 'true' else 'выключено'}."
 
 
@@ -687,7 +701,7 @@ async def _set_layer_enabled(comp_name: str, layer_name: str, enabled: bool) -> 
             return layer.name + {_jsx_field_sep()} + layer.enabled;
         }})();
     """)
-    name, state = result.split(_FIELD_SEP)
+    name, state = _fields(result, 2)
     return f"Слой «{name}»: видимость {'включена' if state == 'true' else 'выключена'}."
 
 
@@ -723,7 +737,7 @@ async def _set_layer_time(
             return layer.name + {_jsx_field_sep()} + layer.inPoint + {_jsx_field_sep()} + layer.outPoint;
         }})();
     """)
-    name, in_pt, out_pt = result.split(_FIELD_SEP)
+    name, in_pt, out_pt = _fields(result, 3)
     return f"Слой «{name}»: inPoint={float(in_pt):.2f}с, outPoint={float(out_pt):.2f}с."
 
 
@@ -776,7 +790,7 @@ async def _set_property_value(comp_name: str, layer_name: str, property_name: st
             return layer.name + {_jsx_field_sep()} + prop.name;
         }})();
     """)
-    layer, prop_name = result.split(_FIELD_SEP, 1)
+    layer, prop_name = _fields(result, 2)
     return f"«{prop_name}» на слое «{layer}» установлено в {value!r}."
 
 

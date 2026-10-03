@@ -41,10 +41,11 @@ async def _open_application(*, name: str) -> dict:
 @register_tool
 @function_tool
 async def open_application(context: RunContext, name: str) -> str:
-    """Open a desktop application by its common name.
+    """Open a desktop application by its common name. Also opens web services
+    named like an app ("YouTube", "Gmail", "vk.com") in the default browser.
 
     Args:
-        name: The application's common/spoken name, e.g. "Chrome", "VS Code", "Telegram".
+        name: The application's common/spoken name, e.g. "Chrome", "VS Code", "Telegram", "Диспетчер задач".
     """
     result = await _open_application(name=name)
     return result["message"]
@@ -57,8 +58,16 @@ _NEVER_CLOSE = {
 
 
 def _find_process_hint(name: str) -> str:
+    """Spoken name -> process-name substring: explicit hint ("гугл" ->
+    chrome), else the launcher alias's exe ("ворд" -> winword), else the
+    name itself minus ".exe" ("Taskmgr.exe" -> taskmgr)."""
     key = name.strip().lower()
-    return config.APP_PROCESS_HINTS.get(key, key)
+    if key in config.APP_PROCESS_HINTS:
+        return config.APP_PROCESS_HINTS[key]
+    alias = config.APP_ALIASES.get(key, {}).get(SYSTEM, "")
+    if alias and ":" not in alias:
+        return alias.lower().removesuffix(".exe").split()[0]
+    return key.removesuffix(".exe")
 
 
 @register_impl("close_application")
@@ -78,21 +87,32 @@ async def _close_application(*, name: str) -> dict:
     if not matched:
         return {"status": "error", "message": f"Не нашёл запущенное приложение «{name}»."}
 
-    closed = []
+    closed, denied = [], []
     for proc in matched:
         try:
             proc.terminate()
-            closed.append(proc.info["name"])
-        except (psutil.NoSuchProcess, psutil.AccessDenied):
+            closed.append(proc)
+        except psutil.NoSuchProcess:
             continue
+        except psutil.AccessDenied:
+            denied.append(proc)
 
-    gone, alive = psutil.wait_procs(matched, timeout=3)
+    gone, alive = psutil.wait_procs(closed, timeout=3)
     for proc in alive:
         try:
             proc.kill()
-        except (psutil.NoSuchProcess, psutil.AccessDenied):
+        except psutil.NoSuchProcess:
             pass
+        except psutil.AccessDenied:
+            denied.append(proc)
 
+    # Elevated apps (Task Manager, anything "run as administrator") refuse a
+    # non-elevated terminate -- say so instead of reporting a close that
+    # never happened.
+    if denied and not gone:
+        return {"status": "error",
+                "message": f"Не могу закрыть {name}: оно запущено с правами администратора, "
+                           "а у меня их нет."}
     return {"status": "ok", "message": f"Закрываю {name} ({len(closed)} процесс(ов))."}
 
 

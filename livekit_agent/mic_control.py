@@ -13,14 +13,13 @@ import json
 import time
 
 import config
+from atomic_io import atomic_write_text
 
 STATE_FILE = config.DATA_DIR / "mic_state.json"
 
 
 def set_muted(muted: bool) -> None:
-    tmp = STATE_FILE.with_suffix(".tmp")
-    tmp.write_text(json.dumps({"muted": bool(muted), "at": time.time()}), encoding="utf-8")
-    tmp.replace(STATE_FILE)
+    atomic_write_text(STATE_FILE, json.dumps({"muted": bool(muted), "at": time.time()}))
 
 
 def is_muted() -> bool:

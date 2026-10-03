@@ -55,7 +55,7 @@ def test_full_cycle(app, monkeypatch):
     assert head._think > 0.5
 
     head.set_status("sleeping")
-    _run(head, clock, 2.0)
+    _run(head, clock, 3.0)                                    # dissolve runs 1.3 + 1.0 + 0.5 s
     assert head._mode == "orb" and head.isVisible()           # standby orb stays
 
     head.set_status("listening")

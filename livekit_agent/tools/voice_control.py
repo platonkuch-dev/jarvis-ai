@@ -51,8 +51,14 @@ async def _change_voice(*, voice_name: str) -> dict:
 
     session = runtime.get_active_session()
     if session is not None and session.tts is not None:
+        # worker.py wraps ElevenLabs in a FallbackAdapter (with Edge as the
+        # backup), which has no update_options of its own -- reach the
+        # ElevenLabs instance inside it.
+        voices = [t for t in getattr(session.tts, "_tts_instances", [session.tts])
+                  if type(t).__module__.startswith("livekit.plugins.elevenlabs")]
         try:
-            session.tts.update_options(voice_id=voice_id)
+            for t in voices:
+                t.update_options(voice_id=voice_id)
         except Exception as exc:
             return {"status": "error", "message": f"Не удалось переключить голос: {exc}"}
 

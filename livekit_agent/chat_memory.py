@@ -40,6 +40,8 @@ load_dotenv()
 
 import config
 import journal
+import tg_session
+from atomic_io import atomic_write_text
 
 logging.basicConfig(level=logging.INFO, format="%(asctime)s %(levelname)s %(name)s %(message)s")
 logger = logging.getLogger("jarvis-voice-agent.chat_memory")
@@ -60,9 +62,7 @@ def _load_state() -> dict[str, Any]:
 
 
 def _save_state(state: dict[str, Any]) -> None:
-    tmp = STATE_FILE.with_suffix(".tmp")
-    tmp.write_text(json.dumps(state, ensure_ascii=False), encoding="utf-8")
-    tmp.replace(STATE_FILE)
+    atomic_write_text(STATE_FILE, json.dumps(state, ensure_ascii=False))
 
 
 def _owner_name() -> str:
@@ -147,7 +147,7 @@ class Archiver:
         from telethon import TelegramClient
 
         self.client = TelegramClient(self.session_path, config.TELEGRAM_API_ID, config.TELEGRAM_API_HASH)
-        await self.client.connect()
+        await tg_session.connect_with_retry(self.client)
         if not await self.client.is_user_authorized():
             await self.client.disconnect()
             self.client = None
@@ -333,10 +333,7 @@ async def digest(state: dict[str, Any]) -> bool:
         logger.warning("digest reply had no summary: %s", reply[:200])
         return False
     summary, raw_facts = parsed
-    tmp = config.JOURNAL_DIGEST_FILE.with_suffix(".tmp")
-    tmp.write_text(json.dumps({"summary": summary[:2400], "updated": time.time()}, ensure_ascii=False),
-                   encoding="utf-8")
-    tmp.replace(config.JOURNAL_DIGEST_FILE)
+    atomic_write_text(config.JOURNAL_DIGEST_FILE, json.dumps({"summary": summary[:2400], "updated": time.time()}, ensure_ascii=False))
     facts = _parse_facts(json.dumps(raw_facts, ensure_ascii=False))
     if facts:
         await update_memory(facts)

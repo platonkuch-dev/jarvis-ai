@@ -73,6 +73,25 @@ def test_fast_path_day_plan():
     assert fast_path.parse("выключи микрофон").args == {"on": False}
     assert fast_path.parse("выключи звук").tool == "system_control"          # sound, not the mic
     assert fast_path.parse("выведи себя на второй экран").tool == "open_hud_panel"
+    assert fast_path.parse("покажи план на завтра") == fast_path.Intent("switch_day_plan", {"day": "завтра", "monitor": 2})
+    assert fast_path.parse("переключи план на понедельник") == fast_path.Intent(
+        "switch_day_plan", {"day": "понедельник", "monitor": 2})
+    assert fast_path.parse("покажи план на вчера на основном экране") == fast_path.Intent(
+        "switch_day_plan", {"day": "вчера", "monitor": 1})
+
+
+def test_day_offset_parses_relative_and_weekday_words():
+    from tools.day_plan import _day_offset
+
+    assert _day_offset("сегодня") == 0
+    assert _day_offset("завтра") == 1
+    assert _day_offset("вчера") == -1
+    assert _day_offset("послезавтра") == 2
+    assert _day_offset("позавчера") == -2
+    assert _day_offset("ерунда") is None
+    today_idx = datetime.now().weekday()
+    assert _day_offset(["понедельник", "вторник", "среда", "четверг",
+                         "пятница", "суббота", "воскресенье"][today_idx]) == 0
 
 
 def test_day_plan_collects(tmp_path, monkeypatch):
@@ -120,6 +139,60 @@ def test_panel_server_routes(monkeypatch):
     assert msg["s"] == "speaking" and msg["l"] == 0.5 and msg["lines"][0]["text"] == "Привет"
     assert msg["p"] is True
     conn.close()
+
+
+def test_panel_day_switching(monkeypatch):
+    import http.client
+
+    import hud_panel
+
+    now = datetime.now().replace(second=0, microsecond=0)
+    ev = config.DATA_DIR / "events.json"
+    ev.write_text(json.dumps([
+        {"title": "Сегодня", "start": now.replace(hour=12, minute=0).isoformat(), "duration_minutes": 30},
+        {"title": "Завтра", "start": (now + timedelta(days=1)).replace(hour=9, minute=0).isoformat(), "duration_minutes": 30},
+    ]), encoding="utf-8")
+    monkeypatch.setattr(config, "EVENTS_FILE", ev)
+    monkeypatch.setattr(config, "HOME_CITY", "")
+    monkeypatch.setattr(hud_panel, "PORT", 48129)    # its own port -- never the live Jarvis's panel server
+    monkeypatch.setattr(hud_panel, "_server", None)
+    monkeypatch.setattr(hud_panel, "STATE_FILE", config.DATA_DIR / "hud_panel_state.json")
+    assert hud_panel.serve()
+    host = {"Host": "127.0.0.1:48129"}
+
+    conn = http.client.HTTPConnection("127.0.0.1", 48129, timeout=3)
+    conn.request("GET", "/data.json?day=0", headers=host)
+    assert [e["title"] for e in json.loads(conn.getresponse().read())["events"]] == ["Сегодня"]
+    conn.request("GET", "/data.json?day=1", headers=host)
+    assert [e["title"] for e in json.loads(conn.getresponse().read())["events"]] == ["Завтра"]
+    conn.close()
+
+    hud_panel.set_plan_day(1)
+    assert hud_panel.plan_day() == 1
+    conn = http.client.HTTPConnection("127.0.0.1", 48129, timeout=3)
+    conn.request("GET", "/events", headers=host)
+    resp = conn.getresponse()
+    msg = json.loads(resp.fp.readline().decode("utf-8").removeprefix("data: "))
+    assert msg["pd"] == 1
+    conn.close()
+
+
+def test_switch_day_plan_tool(monkeypatch):
+    import hud_panel
+    from tools.day_plan import _switch_day_plan
+
+    monkeypatch.setattr(hud_panel, "STATE_FILE", config.DATA_DIR / "hud_panel_state.json")
+    monkeypatch.setattr(config, "HUD_WALLPAPER", True)   # skip the real browser window entirely
+    result = asyncio.run(_switch_day_plan(day="завтра"))
+    assert result["status"] == "ok" and hud_panel.plan_day() == 1
+
+    bad = asyncio.run(_switch_day_plan(day="неведомый день"))
+    assert bad["status"] == "error"
+
+    today_idx = datetime.now().weekday()
+    weekday = ["понедельник", "вторник", "среда", "четверг", "пятница", "суббота", "воскресенье"][today_idx]
+    same_day = asyncio.run(_switch_day_plan(day=weekday))
+    assert same_day["status"] == "ok" and hud_panel.plan_day() == 0
 
 
 @pytest.fixture(scope="module")

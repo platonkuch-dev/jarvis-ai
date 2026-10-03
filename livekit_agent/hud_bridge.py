@@ -14,6 +14,7 @@ import time
 from typing import Any, Literal
 
 import config
+from atomic_io import atomic_write_text
 
 STATE_PATH = config.DATA_DIR / "hud_state.json"
 
@@ -24,9 +25,7 @@ MAX_LINES = 6
 
 def write_state(status: Status, lines: list[dict[str, str]]) -> None:
     data = {"status": status, "lines": lines[-MAX_LINES:], "updated_at": time.time()}
-    tmp = STATE_PATH.with_suffix(".tmp")
-    tmp.write_text(json.dumps(data, ensure_ascii=False), encoding="utf-8")
-    tmp.replace(STATE_PATH)
+    atomic_write_text(STATE_PATH, json.dumps(data, ensure_ascii=False))
 
 
 def read_state() -> dict[str, Any]:

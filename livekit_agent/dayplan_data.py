@@ -11,7 +11,7 @@ from __future__ import annotations
 import json
 import threading
 import time
-from datetime import datetime
+from datetime import datetime, timedelta
 from pathlib import Path
 
 import config
@@ -77,8 +77,11 @@ def _weather(city: str) -> tuple[dict | None, str]:
     return data, name
 
 
-def collect() -> dict:
-    today = datetime.now().date()
+def collect(day_offset: int = 0) -> dict:
+    """`day_offset` shifts which day's events are returned (0 = today, 1 =
+    tomorrow, -1 = yesterday...) -- todos/reminders/weather stay as they are,
+    only the events ring/list is date-scoped."""
+    today = datetime.now().date() + timedelta(days=day_offset)
     events = []
     for e in _load(config.EVENTS_FILE, []):
         try:

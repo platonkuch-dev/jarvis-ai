@@ -19,6 +19,7 @@ import time
 from typing import Any, Literal
 
 import config
+from atomic_io import atomic_write_text
 
 COMMAND_PATH = config.DATA_DIR / "camera_command.json"
 RESULT_PATH = config.DATA_DIR / "camera_result.json"
@@ -33,9 +34,7 @@ Status = Literal["opened", "no_camera", "captured", "closed", "error", "devices"
 
 
 def _write(path, data: dict[str, Any]) -> None:
-    tmp = path.with_suffix(".tmp")
-    tmp.write_text(json.dumps(data, ensure_ascii=False), encoding="utf-8")
-    tmp.replace(path)
+    atomic_write_text(path, json.dumps(data, ensure_ascii=False))
 
 
 def _read(path) -> dict[str, Any] | None:

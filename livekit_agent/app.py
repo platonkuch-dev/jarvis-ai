@@ -148,6 +148,14 @@ class _ManagedProcess:
         # it doesn't crash under the cp1251 codepage some Windows locales use.
         env["PYTHONIOENCODING"] = "utf-8"
         env["PYTHONUTF8"] = "1"
+        # numpy's OpenBLAS commits a work buffer per CPU thread the moment
+        # numpy is imported: measured ~620 MB private memory per process on
+        # this 20-thread machine, times every child (two workers, bridge,
+        # archiver, HUD...) -- ~4 GB for nothing, since Jarvis only does tiny
+        # audio-frame math. One BLAS thread: ~9 MB. setdefault so a user
+        # override in the environment still wins.
+        for var in ("OPENBLAS_NUM_THREADS", "OMP_NUM_THREADS", "MKL_NUM_THREADS"):
+            env.setdefault(var, "1")
         creationflags = subprocess.CREATE_NO_WINDOW if sys.platform == "win32" else 0
         self._proc = subprocess.Popen(
             [PYTHON, *self._args],

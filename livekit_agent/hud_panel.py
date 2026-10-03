@@ -35,6 +35,7 @@ from pathlib import Path
 from typing import Callable
 
 import config
+from atomic_io import atomic_write_text
 
 logger = logging.getLogger("jarvis-voice-agent.hud_panel")
 
@@ -59,9 +60,7 @@ def _read_panel_state() -> dict:
 def _write_panel_state(**changes) -> None:
     state = _read_panel_state()
     state.update(changes, at=time.time())
-    tmp = STATE_FILE.with_suffix(".tmp")
-    tmp.write_text(json.dumps(state), encoding="utf-8")
-    tmp.replace(STATE_FILE)
+    atomic_write_text(STATE_FILE, json.dumps(state))
 
 
 def set_plan(visible: bool) -> None:
@@ -71,6 +70,16 @@ def set_plan(visible: bool) -> None:
 
 def plan_visible() -> bool:
     return bool(_read_panel_state().get("plan"))
+
+
+def set_plan_day(offset: int) -> None:
+    """Which day the plan shows: 0 = today, 1 = tomorrow, -1 = yesterday...
+    Picked up by the open page's /events feed, same as plan/face."""
+    _write_panel_state(plan_day=int(offset))
+
+
+def plan_day() -> int:
+    return int(_read_panel_state().get("plan_day") or 0)
 
 
 def set_face(visible: bool) -> None:
@@ -169,7 +178,7 @@ def _handler(feed: _Feed):
             if self.headers.get("Host", "") not in allowed_hosts:
                 self._send(403, b"forbidden", "text/plain")
                 return
-            path = self.path.split("?", 1)[0]
+            path, _, query = self.path.partition("?")
             if path in ("/", "/index.html"):
                 self._send(200, PAGE.read_bytes(), "text/html; charset=utf-8")
             elif path == "/sys.json":
@@ -181,9 +190,16 @@ def _handler(feed: _Feed):
             elif path == "/plan.html":
                 self._send(200, (PAGE.parent / "plan.html").read_bytes(), "text/html; charset=utf-8")
             elif path == "/data.json":
+                import urllib.parse
+
                 import dayplan_data
 
-                body = json.dumps(dayplan_data.collect(), ensure_ascii=False).encode("utf-8")
+                try:
+                    offset = int(urllib.parse.parse_qs(query).get("day", ["0"])[0])
+                except ValueError:
+                    offset = 0
+                offset = max(-31, min(31, offset))
+                body = json.dumps(dayplan_data.collect(offset), ensure_ascii=False).encode("utf-8")
                 self._send(200, body, "application/json; charset=utf-8")
             elif path == "/events":
                 self._stream()
@@ -202,7 +218,8 @@ def _handler(feed: _Feed):
             import code_feed
             import mic_control
 
-            last_lines, last_state_read, state, watching, plan, muted, face = None, 0.0, {}, False, False, False, False
+            last_lines, last_state_read, state, watching, plan, muted, face, plan_day = \
+                None, 0.0, {}, False, False, False, False, 0
             code_seen = -1.0
             act_seen = -1.0
             try:
@@ -216,11 +233,13 @@ def _handler(feed: _Feed):
                             watching = False
                         panel = _read_panel_state()
                         plan, face = bool(panel.get("plan")), bool(panel.get("face"))
+                        plan_day = int(panel.get("plan_day") or 0)
                         muted = mic_control.is_muted()
                         last_state_read = now
                     level, sib = feed.level_fn() if feed.level_fn else (0.0, 0.0)
                     msg = {"s": state.get("status", "idle"), "l": round(float(level), 3),
-                           "b": round(float(sib), 3), "w": watching, "p": plan, "f": face, "m": muted, "u": state.get("updated_at", 0.0)}
+                           "b": round(float(sib), 3), "w": watching, "p": plan, "f": face, "pd": plan_day,
+                           "m": muted, "u": state.get("updated_at", 0.0)}
                     lines = state.get("lines") or []
                     if lines != last_lines:
                         msg["lines"] = lines[-4:]

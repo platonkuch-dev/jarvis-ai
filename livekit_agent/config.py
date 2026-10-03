@@ -581,11 +581,93 @@ APP_ALIASES: dict[str, dict[str, str]] = {
     "premiere pro": {"Windows": "Adobe Premiere Pro.exe", "Darwin": "Adobe Premiere Pro 2025", "Linux": "premiere"},
     "after effects": {"Windows": "AfterFX.exe", "Darwin": "Adobe After Effects 2025", "Linux": "afterfx"},
     "illustrator": {"Windows": "Illustrator.exe", "Darwin": "Adobe Illustrator 2025", "Linux": "illustrator"},
+    # Spoken Russian names. Store/UWP apps with a Russian title in Start
+    # ("Блокнот", "Калькулятор", "Диспетчер задач") are also found by
+    # app_launcher's Get-StartApps lookup; these cover the colloquial forms.
+    "гугл": {"Windows": "chrome", "Darwin": "Google Chrome", "Linux": "google-chrome"},
+    "google": {"Windows": "chrome", "Darwin": "Google Chrome", "Linux": "google-chrome"},
+    "хром": {"Windows": "chrome", "Darwin": "Google Chrome", "Linux": "google-chrome"},
+    "гугл хром": {"Windows": "chrome", "Darwin": "Google Chrome", "Linux": "google-chrome"},
+    "телеграм": {"Windows": "Telegram", "Darwin": "Telegram", "Linux": "telegram"},
+    "телеграмм": {"Windows": "Telegram", "Darwin": "Telegram", "Linux": "telegram"},
+    "дискорд": {"Windows": "Discord", "Darwin": "Discord", "Linux": "discord"},
+    "спотифай": {"Windows": "spotify", "Darwin": "Spotify", "Linux": "spotify"},
+    "стим": {"Windows": "steam", "Darwin": "Steam", "Linux": "steam"},
+    "ворд": {"Windows": "winword", "Darwin": "Microsoft Word", "Linux": "libreoffice --writer"},
+    "эксель": {"Windows": "excel", "Darwin": "Microsoft Excel", "Linux": "libreoffice --calc"},
+    "фотошоп": {"Windows": "Photoshop.exe", "Darwin": "Adobe Photoshop 2025", "Linux": "photoshop"},
+    "афтер эффектс": {"Windows": "AfterFX.exe", "Darwin": "Adobe After Effects 2025", "Linux": "afterfx"},
+    "проводник": {"Windows": "explorer.exe", "Darwin": "Finder", "Linux": "nautilus"},
+    "task manager": {"Windows": "taskmgr.exe", "Darwin": "Activity Monitor", "Linux": "gnome-system-monitor"},
+    "диспетчер задач": {"Windows": "taskmgr.exe", "Darwin": "Activity Monitor", "Linux": "gnome-system-monitor"},
+    "settings": {"Windows": "ms-settings:", "Darwin": "System Settings", "Linux": "gnome-control-center"},
+    "настройки": {"Windows": "ms-settings:", "Darwin": "System Settings", "Linux": "gnome-control-center"},
+    "параметры": {"Windows": "ms-settings:", "Darwin": "System Settings", "Linux": "gnome-control-center"},
+    "панель управления": {"Windows": "control.exe", "Darwin": "System Settings", "Linux": "gnome-control-center"},
+}
+
+# Web services people ask to "open" like an app. open_application sends
+# these to the default browser instead of failing as "not installed"
+# (unless an app with exactly that name -- e.g. a PWA -- is in Start).
+WEB_APP_URLS: dict[str, str] = {
+    "youtube": "https://www.youtube.com",
+    "ютуб": "https://www.youtube.com",
+    "ютьюб": "https://www.youtube.com",
+    "youtube music": "https://music.youtube.com",
+    "gmail": "https://mail.google.com",
+    "гмейл": "https://mail.google.com",
+    "google drive": "https://drive.google.com",
+    "гугл диск": "https://drive.google.com",
+    "google docs": "https://docs.google.com",
+    "google maps": "https://maps.google.com",
+    "гугл карты": "https://maps.google.com",
+    "chatgpt": "https://chatgpt.com",
+    "чатгпт": "https://chatgpt.com",
+    "github": "https://github.com",
+    "гитхаб": "https://github.com",
+    "twitch": "https://www.twitch.tv",
+    "твич": "https://www.twitch.tv",
+    "вк": "https://vk.com",
+    "вконтакте": "https://vk.com",
+    "netflix": "https://www.netflix.com",
+    "нетфликс": "https://www.netflix.com",
+    "twitter": "https://x.com",
+    "твиттер": "https://x.com",
+    "instagram": "https://www.instagram.com",
+    "инстаграм": "https://www.instagram.com",
+    "reddit": "https://www.reddit.com",
+    "реддит": "https://www.reddit.com",
+    "wikipedia": "https://ru.wikipedia.org",
+    "википедия": "https://ru.wikipedia.org",
+    "chess.com": "https://www.chess.com",
+    "шахматы": "https://www.chess.com/play",
+    "chess": "https://www.chess.com/play",
 }
 
 # Process-name substrings used by close_application to match a running
 # process when the friendly name doesn't match the exe name directly.
+# Keys are matched after lower-casing; close_application also falls back to
+# APP_ALIASES (minus ".exe"), so only names whose process differs from both
+# need an entry here.
 APP_PROCESS_HINTS: dict[str, str] = {
+    "google": "chrome",
+    "гугл": "chrome",
+    "хром": "chrome",
+    "блокнот": "notepad",
+    "калькулятор": "calculatorapp",
+    "calculator": "calculatorapp",
+    "paint": "mspaint",
+    "пейнт": "mspaint",
+    "диспетчер задач": "taskmgr",
+    "task manager": "taskmgr",
+    "after effects": "afterfx",
+    "афтер эффектс": "afterfx",
+    "фотошоп": "photoshop",
+    "capcut": "capcut",
+    "кап кат": "capcut",
+    "counter strike": "cs2",
+    "cs": "cs2",
+    "кс": "cs2",
     "chrome": "chrome",
     "vscode": "code",
     "vs code": "code",

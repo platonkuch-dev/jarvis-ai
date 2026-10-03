@@ -126,6 +126,7 @@ const ICONS_W = WALLPAPER ? 230 : 0;                 // the desktop-icon column 
 if (WALLPAPER) document.documentElement.classList.add("wallpaper");
 const reduce = matchMedia("(prefers-reduced-motion: reduce)").matches;
 let DATA = { events: [], todos: [], reminders: [], weather: null, name: "", city: "" };
+let DAY_OFFSET = 0;                                   // which day's events are shown: 0 = today, voice-controlled
 const WEEK = ["воскресенье", "понедельник", "вторник", "среда", "четверг", "пятница", "суббота"];
 const MON = ["января", "февраля", "марта", "апреля", "мая", "июня", "июля", "августа", "сентября", "октября", "ноября", "декабря"];
 const pad = (n) => String(n).padStart(2, "0");
@@ -147,19 +148,34 @@ function countdown(sec) {
 
 /* ---------- data from Jarvis (the panel server), re-read every 15 s ---------- */
 async function poll() {
-  try { DATA = await (await fetch("/data.json", { cache: "no-store" })).json(); renderLists(); } catch (e) { /* server restarting */ }
+  try { DATA = await (await fetch(`/data.json?day=${DAY_OFFSET}`, { cache: "no-store" })).json(); renderLists(); } catch (e) { /* server restarting */ }
+}
+function daysWord(n) {
+  n = Math.abs(n) % 100;
+  const last = n % 10;
+  if (n >= 11 && n <= 14) return "дней";
+  if (last === 1) return "день";
+  if (last >= 2 && last <= 4) return "дня";
+  return "дней";
 }
 function renderLists() {
   const now = new Date();
+  const isToday = DAY_OFFSET === 0;
+  const target = new Date(now); target.setDate(target.getDate() + DAY_OFFSET);
   const hour = now.getHours();
   const part = hour < 5 ? "Доброй ночи" : hour < 12 ? "Доброе утро" : hour < 18 ? "Добрый день" : "Добрый вечер";
-  $("day").innerHTML = `<b>${WEEK[now.getDay()][0].toUpperCase() + WEEK[now.getDay()].slice(1)}</b>, ${now.getDate()} ${MON[now.getMonth()]}`;
-  $("greet").textContent = DATA.name ? `${part}, ${DATA.name}.` : `${part}.`;
+  $("day").innerHTML = `<b>${WEEK[target.getDay()][0].toUpperCase() + WEEK[target.getDay()].slice(1)}</b>, ${target.getDate()} ${MON[target.getMonth()]}`;
+  if (isToday) {
+    $("greet").textContent = DATA.name ? `${part}, ${DATA.name}.` : `${part}.`;
+  } else if (DAY_OFFSET === 1) { $("greet").textContent = "Завтра";
+  } else if (DAY_OFFSET === -1) { $("greet").textContent = "Вчера";
+  } else if (DAY_OFFSET > 0) { $("greet").textContent = `Через ${DAY_OFFSET} ${daysWord(DAY_OFFSET)}`;
+  } else { $("greet").textContent = `${-DAY_OFFSET} ${daysWord(DAY_OFFSET)} назад`; }
   const w = DATA.weather;
-  $("weather").innerHTML = w
+  $("weather").innerHTML = isToday && w
     ? `<span class="t">${Math.round(w.temp)}°</span> ${esc(DATA.city || "")}<span class="c">${esc(w.condition)}${w.min != null ? `, днём ${Math.round(w.min)}…${Math.round(w.max)}°` : ""}${w.rain != null ? `, осадки ${w.rain}%` : ""}</span>`
     : "";
-  const nowMin = minsOf(now);
+  const nowMin = isToday ? minsOf(now) : 0;               // no "now" inside a day that isn't today
   const evs = DATA.events.slice().sort((a, b) => a.start - b.start);
   const upcoming = evs.filter((e) => e.start + e.duration > nowMin);
   const nextIdx = evs.findIndex((e) => e.start >= nowMin);
@@ -171,7 +187,9 @@ function renderLists() {
     const note = running ? "идёт сейчас" : past ? "прошло" : span(e.start - nowMin);
     const hm = `${pad(Math.floor(e.start / 60))}:${pad(Math.floor(e.start % 60))}`;
     return `<li class="ev${isNext || running ? " next" : ""}${past ? " past" : ""}"><time>${hm}</time><span class="ti">${esc(e.title)}<span class="in">${note}</span></span></li>`;
-  }).join("") : `<li class="empty">На сегодня событий нет. Скажите «добавь встречу на 15:00» — она появится на кольце.</li>`;
+  }).join("") : isToday
+      ? `<li class="empty">На сегодня событий нет. Скажите «добавь встречу на 15:00» — она появится на кольце.</li>`
+      : `<li class="empty">На этот день событий нет.</li>`;
   const todos = DATA.todos;
   $("todoCount").textContent = todos.length ? String(todos.length) : "";
   $("todos").innerHTML = todos.length
@@ -192,12 +210,19 @@ function renderReminders() {
 function tick() {
   const now = new Date();
   $("hm").innerHTML = `${pad(now.getHours())}:${pad(now.getMinutes())}<span class="s">${pad(now.getSeconds())}</span>`;
-  const nowMin = minsOf(now);
-  const next = DATA.events.filter((e) => e.start >= nowMin).sort((a, b) => a.start - b.start)[0];
-  const running = DATA.events.find((e) => e.start <= nowMin && e.start + e.duration > nowMin);
-  $("left").innerHTML = running ? `Сейчас: <em>${esc(running.title)}</em>`
-    : next ? `${esc(next.title)} — <em>${span(next.start - nowMin)}</em>`
-    : `До конца дня ${span(1440 - nowMin).replace("через ", "")}`;
+  if (DAY_OFFSET === 0) {
+    const nowMin = minsOf(now);
+    const next = DATA.events.filter((e) => e.start >= nowMin).sort((a, b) => a.start - b.start)[0];
+    const running = DATA.events.find((e) => e.start <= nowMin && e.start + e.duration > nowMin);
+    $("left").innerHTML = running ? `Сейчас: <em>${esc(running.title)}</em>`
+      : next ? `${esc(next.title)} — <em>${span(next.start - nowMin)}</em>`
+      : `До конца дня ${span(1440 - nowMin).replace("через ", "")}`;
+  } else {                                                // viewing another day: no "now" to count down to
+    const first = DATA.events.slice().sort((a, b) => a.start - b.start)[0];
+    $("left").innerHTML = first
+      ? `${esc(first.title)} — <em>в ${pad(Math.floor(first.start / 60))}:${pad(Math.floor(first.start % 60))}</em>`
+      : "";
+  }
   renderReminders();
 }
 
@@ -456,8 +481,13 @@ function listenToJarvis() {
   let es;
   try { es = new EventSource("/events"); } catch (e) { return; }
   es.onmessage = (ev) => {
-    const sleeping = JSON.parse(ev.data).s === "sleeping";
+    const data = JSON.parse(ev.data);
+    const sleeping = data.s === "sleeping";
     PH.known = true;
+    if (typeof data.pd === "number" && data.pd !== DAY_OFFSET) {   // Jarvis switched the shown day
+      DAY_OFFSET = data.pd;
+      poll();
+    }
     if (sleeping && (PH.state === "shown" || PH.state === "forming")) setState("dissolving");
     else if (!sleeping && (PH.state === "hidden" || PH.state === "dissolving")) startForming();
   };
@@ -468,7 +498,7 @@ function frame(now) {
   const since = (now - PH.t0) / 1000;
   if (PH.state === "forming" && since > FORM_S + 0.9) setState("shown");
   if (PH.state === "dissolving" && since > DISS_S) setState("hidden");
-  const nowD = new Date(), nowMin = minsOf(nowD);
+  const nowD = new Date(), isToday = DAY_OFFSET === 0, nowMin = isToday ? minsOf(nowD) : 0;
   const yaw = ringYaw(t);
   const st = PH.state;
 
@@ -541,18 +571,20 @@ function frame(now) {
       cx.fillStyle = "#DDF3FF"; cx.font = `500 ${fs}px Manrope, sans-serif`;
       cx.fillText(title, lab.x, lab.y);
     }
-    const p = project(...ringPt(nowMin, 1.0), yaw), top = project(...ringPt(nowMin, 1.0, 0.34), yaw);
-    const gr = cx.createLinearGradient(p.x, p.y, top.x, top.y);
-    gr.addColorStop(0, "rgba(255,181,74,0.9)"); gr.addColorStop(1, "rgba(255,181,74,0)");
-    cx.globalAlpha = settled; cx.strokeStyle = gr; cx.lineWidth = 2;
-    cx.beginPath(); cx.moveTo(p.x, p.y); cx.lineTo(top.x, top.y); cx.stroke();
-    const pulse = reduce ? 0 : (Math.sin(t * 2.4) + 1) / 2;
-    cx.fillStyle = "#FFB54A"; cx.shadowColor = "#FFB54A"; cx.shadowBlur = 24;
-    cx.beginPath(); cx.arc(p.x, p.y, 6 + pulse * 3, 0, Math.PI * 2); cx.fill();
-    cx.shadowBlur = 0;
-    cx.globalAlpha = 0.35 * (1 - pulse) * settled;
-    cx.strokeStyle = "#FFB54A"; cx.lineWidth = 1.5;
-    cx.beginPath(); cx.arc(p.x, p.y, 10 + pulse * 22, 0, Math.PI * 2); cx.stroke();
+    if (isToday) {                                       // the "right now" beacon only makes sense on today's ring
+      const p = project(...ringPt(nowMin, 1.0), yaw), top = project(...ringPt(nowMin, 1.0, 0.34), yaw);
+      const gr = cx.createLinearGradient(p.x, p.y, top.x, top.y);
+      gr.addColorStop(0, "rgba(255,181,74,0.9)"); gr.addColorStop(1, "rgba(255,181,74,0)");
+      cx.globalAlpha = settled; cx.strokeStyle = gr; cx.lineWidth = 2;
+      cx.beginPath(); cx.moveTo(p.x, p.y); cx.lineTo(top.x, top.y); cx.stroke();
+      const pulse = reduce ? 0 : (Math.sin(t * 2.4) + 1) / 2;
+      cx.fillStyle = "#FFB54A"; cx.shadowColor = "#FFB54A"; cx.shadowBlur = 24;
+      cx.beginPath(); cx.arc(p.x, p.y, 6 + pulse * 3, 0, Math.PI * 2); cx.fill();
+      cx.shadowBlur = 0;
+      cx.globalAlpha = 0.35 * (1 - pulse) * settled;
+      cx.strokeStyle = "#FFB54A"; cx.lineWidth = 1.5;
+      cx.beginPath(); cx.arc(p.x, p.y, 10 + pulse * 22, 0, Math.PI * 2); cx.stroke();
+    }
     cx.restore();
   }
 

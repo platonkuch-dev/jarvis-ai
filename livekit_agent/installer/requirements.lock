@@ -15,6 +15,7 @@ charset-normalizer==3.5.1
 click==8.5.0
 colorama==0.4.6
 comtypes==1.4.16
+cryptg==0.6.0
 ddgs==9.16.0
 distro==1.9.0
 docstring_parser==0.18.0

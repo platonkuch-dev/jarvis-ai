@@ -712,7 +712,9 @@ async def telegram_sign_in(request: Request) -> dict[str, Any]:
     # bootstrapped only when missing -- a stale copy from another account
     # would silently keep using it, so drop them (best effort: a running
     # process may hold the file, in which case it's the same account anyway).
-    for suffix in ("_bridge", "_monitor"):
+    import tg_session
+
+    for suffix in tg_session.COPY_SUFFIXES:
         try:
             Path(str(TELEGRAM_SESSION) + suffix + ".session").unlink(missing_ok=True)
         except OSError:

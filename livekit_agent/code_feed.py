@@ -14,11 +14,13 @@ One tiny JSON file, rewritten atomically: no locks needed between the writer
 from __future__ import annotations
 
 import json
+import os
 import time
 from pathlib import Path
 from typing import Any
 
 import config
+from atomic_io import atomic_write_text
 
 STATE_FILE = config.DATA_DIR / "code_session.json"
 STOP_FILE = config.DATA_DIR / "code_stop.flag"
@@ -28,9 +30,7 @@ MAX_TEXT = 400
 
 def _write(state: dict[str, Any]) -> None:
     state["updated"] = time.time()
-    tmp = STATE_FILE.with_suffix(".tmp")
-    tmp.write_text(json.dumps(state, ensure_ascii=False), encoding="utf-8")
-    tmp.replace(STATE_FILE)
+    atomic_write_text(STATE_FILE, json.dumps(state, ensure_ascii=False))
 
 
 def read() -> dict[str, Any]:
@@ -49,8 +49,33 @@ def mtime() -> float:
 
 def start(project: str, task: str) -> None:
     STOP_FILE.unlink(missing_ok=True)
+    # pid: the worker running the session -- if it dies (a restart, an
+    # update), the session died with it; see is_running().
     _write({"active": True, "project": project, "task": task[:MAX_TEXT], "started": time.time(),
-            "events": [], "result": "", "ok": None, "finished": 0.0})
+            "events": [], "result": "", "ok": None, "finished": 0.0, "pid": os.getpid()})
+
+
+def _alive(pid: Any) -> bool:
+    try:
+        import psutil
+
+        return bool(pid) and psutil.pid_exists(int(pid))
+    except Exception:
+        return True  # can't tell -- don't declare a live session dead
+
+
+def is_running() -> bool:
+    """Whether a coding session is really in progress. A session whose worker
+    is gone (Jarvis restarted mid-work) is closed as interrupted, so it neither
+    hangs on the hologram as "working" nor blocks the next task as busy."""
+    state = read()
+    if not state.get("active"):
+        return False
+    if _alive(state.get("pid")):
+        return True
+    finish("Прервано: Джарвис перезапустился посреди работы. Попроси продолжить — "
+           "незаконченные правки остались в проекте.", False)
+    return False
 
 
 def add(kind: str, text: str) -> None:

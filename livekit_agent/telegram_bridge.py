@@ -24,10 +24,7 @@ from __future__ import annotations
 
 import asyncio
 import logging
-import shutil
-import sqlite3
 import time
-from pathlib import Path
 
 from dotenv import load_dotenv
 
@@ -39,6 +36,7 @@ import config
 import prompts
 import telegram_contacts
 import telegram_owner
+import tg_session
 from telethon import TelegramClient, events
 from tools._store import JsonStore
 from tools.memory import load_memory
@@ -233,11 +231,7 @@ async def main() -> None:
         logger.error("TELEGRAM_API_ID/TELEGRAM_API_HASH not set -- see .env")
         return
 
-    bridge_session = Path(config.TELEGRAM_BRIDGE_SESSION_PATH + ".session")
-    main_session = Path(config.TELEGRAM_SESSION_PATH + ".session")
-    if not bridge_session.exists() and main_session.exists():
-        shutil.copyfile(main_session, bridge_session)
-        logger.info("bootstrapped bridge session from the main Telegram session")
+    tg_session.own_copy(config.TELEGRAM_BRIDGE_SESSION_PATH)
 
     from tools import tasks
 
@@ -262,17 +256,7 @@ async def main() -> None:
     # fixes a transient lock in seconds instead of minutes; a persistent one
     # still falls through to the exception and lets the supervisor's restart
     # loop (and its 5-crashes/5-minutes backoff) take over as before.
-    for attempt in range(6):
-        try:
-            await client.start(phone=config.TELEGRAM_PHONE or None)
-            break
-        except sqlite3.OperationalError as exc:
-            if "locked" not in str(exc).lower() or attempt == 5:
-                raise
-            delay = 2 ** attempt
-            logger.warning("session database locked on connect (attempt %d/6) -- retrying in %ds: %s",
-                           attempt + 1, delay, exc)
-            await asyncio.sleep(delay)
+    await tg_session.connect_with_retry(client, start=True, phone=config.TELEGRAM_PHONE or None)
     if not await client.is_user_authorized():
         logger.error("Telegram account not authorized -- run telegram_login.py first")
         return

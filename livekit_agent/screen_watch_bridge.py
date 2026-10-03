@@ -14,15 +14,14 @@ import time
 from typing import Any
 
 import config
+from atomic_io import atomic_write_text
 
 STATE_PATH = config.DATA_DIR / "screen_watch_state.json"
 
 
 def write_state(watching: bool) -> None:
     data = {"watching": watching, "updated_at": time.time()}
-    tmp = STATE_PATH.with_suffix(".tmp")
-    tmp.write_text(json.dumps(data), encoding="utf-8")
-    tmp.replace(STATE_PATH)
+    atomic_write_text(STATE_PATH, json.dumps(data))
 
 
 def read_state() -> dict[str, Any]:

@@ -11,6 +11,7 @@ an ordinary error result rather than a crash.
 from __future__ import annotations
 
 import re
+import sys
 
 from livekit.agents import RunContext, function_tool
 from telethon import TelegramClient
@@ -19,6 +20,7 @@ from telethon.tl.types import InputPhoneContact
 
 import config
 import telegram_contacts
+import tg_session
 from tools._logging import log_call
 from tools.memory import load_memory
 from tools.registry import register_impl, register_tool
@@ -29,11 +31,15 @@ _client: TelegramClient | None = None
 async def _get_client() -> TelegramClient:
     global _client
     if _client is None:
+        # Both voice workers (desktop console + phone) load this module; on
+        # the shared main session file they locked each other out.
+        role = "_worker_console" if "console" in sys.argv else "_worker_phone"
         _client = TelegramClient(
-            config.TELEGRAM_SESSION_PATH, config.TELEGRAM_API_ID, config.TELEGRAM_API_HASH
+            tg_session.own_copy(config.TELEGRAM_SESSION_PATH + role),
+            config.TELEGRAM_API_ID, config.TELEGRAM_API_HASH,
         )
     if not _client.is_connected():
-        await _client.connect()
+        await tg_session.connect_with_retry(_client)
     if not await _client.is_user_authorized():
         raise RuntimeError(
             "Telegram-аккаунт Джарвиса ещё не авторизован -- нужно один раз "

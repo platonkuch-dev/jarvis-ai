@@ -139,6 +139,34 @@ def secret_check(installed_env: str | None) -> None:
         raise Failed("в коммит попали бы секреты или личные данные: " + "; ".join(errors[:5]))
 
 
+def wait_for_coding(data_dir: Path, notify: "Notifier", limit_s: float = 3 * 3600) -> None:
+    """Installing restarts Jarvis, and with him a Claude Code session running
+    on the hologram (code_session.json) -- so wait until there is none."""
+    import psutil
+
+    def busy() -> bool:
+        try:
+            state = json.loads((data_dir / "code_session.json").read_text(encoding="utf-8"))
+        except (OSError, ValueError):
+            return False
+        if not state.get("active"):
+            return False
+        pid = state.get("pid")
+        if pid:
+            return psutil.pid_exists(int(pid))
+        return time.time() - float(state.get("updated") or 0) < 600  # older sessions without a pid
+
+    deadline = time.time() + limit_s
+    told = False
+    while busy():
+        if time.time() > deadline:
+            raise Failed("Claude Code на голограмме работает уже больше трёх часов — установку не начинаю")
+        if not told:
+            notify("🛠 На голограмме работает Claude Code — поставлю новую версию, когда он закончит.")
+            told = True
+        time.sleep(30)
+
+
 def main() -> int:
     parser = argparse.ArgumentParser()
     parser.add_argument("--job", required=True)
@@ -206,9 +234,11 @@ def main() -> int:
         run([gh, "release", "create", f"v{version}", str(setup), str(setup.with_suffix(".sha256")),
              "-R", GITHUB_REPO, "--title", f"Jarvis AI {version}", "--notes-file", str(notes_file),
              "--target", sha, "--latest"], timeout=1800, env=gh_env(gh))
-        notify(f"🛠 Версия {version} выложена на GitHub и закоммичена. Устанавливаю — Джарвис перезапустится.")
+        notify(f"🛠 Версия {version} выложена на GitHub и закоммичена. Ставлю её — Джарвис перезапустится.")
 
         stage = "установка"
+        if job.get("outbox"):
+            wait_for_coding(Path(job["outbox"]).parent, notify)
         # Only the setup process is waited for -- the Jarvis it launches keeps running.
         proc = subprocess.Popen([str(setup), "/S", "/AUTOSTART", "/LAUNCH"], creationflags=NO_WINDOW,
                                 stdin=subprocess.DEVNULL, stdout=subprocess.DEVNULL, stderr=subprocess.DEVNULL)
