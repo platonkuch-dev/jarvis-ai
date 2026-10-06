@@ -523,6 +523,14 @@ NEWS_FEEDS = os.environ.get(
 HOME_ASSISTANT_URL = os.environ.get("HOME_ASSISTANT_URL", "").rstrip("/")
 HOME_ASSISTANT_TOKEN = os.environ.get("HOME_ASSISTANT_TOKEN", "")
 
+# --- Order requests from the portfolio site (site_leads.py) ---
+# proactive_monitor polls the site's /api/leads-feed and forwards new leads to
+# Telegram from Jarvis's account. The key is the site's NOTIFY_KEY secret
+# (read-only, separate from the admin password). Empty key = off.
+SITE_LEADS_URL = os.environ.get("SITE_LEADS_URL", "https://jarvis-ai-site-98w.pages.dev").rstrip("/")
+SITE_LEADS_KEY = os.environ.get("SITE_LEADS_KEY", "")
+SITE_LEADS_POLL_S = float(os.environ.get("SITE_LEADS_POLL_S", "60"))
+
 # --- Bluetooth LED strip, "Lotus Lantern" app (tools/led_strip.py) ---
 # MAC address of the strip; empty = find it by name over Bluetooth and remember it.
 LED_STRIP_ADDRESS = os.environ.get("LED_STRIP_ADDRESS", "").strip()

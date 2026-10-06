@@ -34,6 +34,7 @@ load_dotenv()
 
 import config
 import notify
+import site_leads
 import telegram_owner
 import tg_session
 from telethon import TelegramClient
@@ -181,9 +182,16 @@ async def main() -> None:
                 config.MONITOR_CHECK_INTERVAL_S, _OUTBOX_INTERVAL_S)
 
     last_checks = 0.0
+    last_leads_poll = 0.0
     while True:
         owner_id = telegram_owner.load_owner_id()
         if owner_id is not None and await client.is_user_authorized():
+            if site_leads.enabled() and time.time() - last_leads_poll >= config.SITE_LEADS_POLL_S:
+                last_leads_poll = time.time()
+                try:
+                    await asyncio.to_thread(site_leads.poll)   # queues into the outbox drained just below
+                except Exception:
+                    logger.exception("site leads poll failed")
             await _deliver_outbox(client, owner_id)
             if time.time() - last_checks >= config.MONITOR_CHECK_INTERVAL_S:
                 last_checks = time.time()
