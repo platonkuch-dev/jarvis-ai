@@ -374,6 +374,21 @@ kbd {
 .cta { padding: clamp(100px, 14vw, 180px) 0; text-align: center; position: relative; }
 .cta h2 { font-size: clamp(36px, 6vw, 76px); margin-bottom: 20px; }
 .cta .lead { margin-inline: auto; }
+.lead-form { max-width: 640px; margin: 0 auto; text-align: left; display: grid; gap: 16px; padding: 30px; border: 1px solid var(--border); border-radius: var(--radius); background: var(--surface); backdrop-filter: blur(10px); }
+.lead-form .lead-or { text-align: center; color: var(--muted); font-size: 15px; margin-bottom: 4px; }
+.lf-row { display: grid; grid-template-columns: 1fr 1fr; gap: 16px; }
+.lead-form label { display: grid; gap: 8px; font-size: 13px; color: var(--muted); font-family: var(--mono); letter-spacing: .02em; }
+.lead-form input, .lead-form textarea, .lead-form select { width: 100%; font: 15px/1.5 var(--font); color: var(--text); background: rgba(5, 7, 13, .6); border: 1px solid var(--border); border-radius: 12px; padding: 12px 14px; outline: none; transition: border-color .2s, box-shadow .2s; }
+.lead-form textarea { resize: vertical; min-height: 110px; }
+.lead-form select option { background: #0b0e17; }
+.lead-form input:focus, .lead-form textarea:focus, .lead-form select:focus { border-color: var(--cyan); box-shadow: 0 0 0 3px rgba(34, 211, 238, .15); }
+.lead-form .lf-budget { max-width: 260px; }
+.lead-form .btn { justify-self: start; }
+.lead-form .btn[disabled] { opacity: .6; pointer-events: none; }
+.lf-hp { position: absolute !important; left: -9999px; width: 1px; height: 1px; opacity: 0; }
+.lf-status { min-height: 1.4em; font-size: 14px; color: var(--muted); }
+.lf-status.ok { color: var(--green); } .lf-status.err { color: #f87171; }
+@media (max-width: 620px) { .lf-row { grid-template-columns: 1fr; } .lead-form { padding: 20px; } .lead-form .btn { justify-self: stretch; } }
 .footer { border-top: 1px solid var(--border); padding: 28px 0; font-size: 13px; color: var(--muted); background: rgba(5, 7, 13, .7); backdrop-filter: blur(10px); }
 .foot-row { display: flex; justify-content: space-between; flex-wrap: wrap; gap: 10px; }
 

@@ -1,0 +1,179 @@
+<!doctype html>
+<html lang="ru">
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width, initial-scale=1">
+<meta name="robots" content="noindex, nofollow">
+<title>JARVIS AI · Админка</title>
+<style>
+:root{--bg:#05070d;--card:#0c0f18;--border:rgba(255,255,255,.09);--text:#e6ebf5;--muted:#8a94a8;--cyan:#22d3ee;--indigo:#6366f1;--violet:#a78bfa;--green:#22c55e;--red:#f87171;--amber:#fbbf24}
+*{box-sizing:border-box}
+[hidden]{display:none!important}
+h1 button{font-size:14px;padding:7px 14px}
+body{margin:0;background:var(--bg);color:var(--text);font:15px/1.5 Sora,system-ui,-apple-system,'Segoe UI',sans-serif}
+.wrap{max-width:1180px;margin:0 auto;padding:28px 16px 60px}
+h1{font-size:22px;margin:0 0 22px;display:flex;align-items:center;gap:12px;flex-wrap:wrap}
+h1 small{font-size:13px;color:var(--muted);font-weight:400}
+h2{font-size:15px;margin:0 0 14px;color:var(--muted);font-weight:600;letter-spacing:.02em}
+.card{background:var(--card);border:1px solid var(--border);border-radius:16px;padding:20px}
+.grid{display:grid;gap:16px}
+.tiles{grid-template-columns:repeat(auto-fit,minmax(170px,1fr));margin-bottom:16px}
+.tile .n{font-size:32px;font-weight:700;font-variant-numeric:tabular-nums}
+.tile .l{color:var(--muted);font-size:13px}
+.two{grid-template-columns:2fr 1fr;margin-bottom:16px}
+.three{grid-template-columns:repeat(3,1fr);margin-bottom:16px}
+@media(max-width:900px){.two,.three{grid-template-columns:1fr}}
+.chart{display:flex;align-items:flex-end;gap:3px;height:150px;border-bottom:1px solid var(--border)}
+.chart .b{flex:1;display:flex;flex-direction:column-reverse;gap:1px;min-width:0;height:100%;justify-content:flex-start;position:relative}
+.chart .b i{display:block;border-radius:3px 3px 0 0}
+.chart .b:hover::after{content:attr(data-t);position:absolute;bottom:100%;left:50%;transform:translateX(-50%);white-space:nowrap;background:#1a1f2e;border:1px solid var(--border);padding:4px 8px;border-radius:8px;font-size:12px;z-index:2}
+.axis{display:flex;justify-content:space-between;color:var(--muted);font-size:11px;margin-top:6px}
+.legend{display:flex;gap:16px;font-size:12px;color:var(--muted);margin-top:10px;flex-wrap:wrap}
+.legend span::before{content:'';display:inline-block;width:10px;height:10px;border-radius:3px;margin-right:6px;background:var(--c);vertical-align:-1px}
+table{width:100%;border-collapse:collapse;font-size:14px}
+td,th{padding:7px 4px;text-align:left;border-bottom:1px solid var(--border)}
+th{color:var(--muted);font-weight:500;font-size:12px}
+td.n{text-align:right;font-variant-numeric:tabular-nums;width:60px}
+.bar{height:6px;border-radius:3px;background:linear-gradient(90deg,var(--cyan),var(--indigo));margin-top:4px}
+.lead{border:1px solid var(--border);border-radius:14px;padding:16px;margin-bottom:12px;background:rgba(255,255,255,.02)}
+.lead.new{border-color:rgba(34,211,238,.45)}
+.lead header{display:flex;gap:10px;align-items:baseline;flex-wrap:wrap;margin-bottom:8px}
+.lead header b{font-size:16px}
+.lead .meta{color:var(--muted);font-size:12px}
+.lead .msg{white-space:pre-wrap;word-break:break-word;margin:8px 0 12px}
+.lead .contact{font-family:ui-monospace,Consolas,monospace;color:var(--cyan);word-break:break-all}
+select,input,button{font:inherit;color:var(--text);background:#0a0d15;border:1px solid var(--border);border-radius:10px;padding:8px 12px}
+button{cursor:pointer;background:linear-gradient(100deg,var(--cyan),var(--indigo));color:#05070d;font-weight:700;border:0}
+button.ghost{background:transparent;color:var(--text);border:1px solid var(--border);font-weight:500}
+.login{max-width:380px;margin:12vh auto;display:grid;gap:12px}
+.filters{display:flex;gap:8px;flex-wrap:wrap;margin-bottom:14px}
+.filters button{padding:6px 12px;font-size:13px}
+.filters button.on{border-color:var(--cyan);color:var(--cyan)}
+.pill{font-size:11px;padding:2px 8px;border-radius:99px;border:1px solid var(--border);color:var(--muted)}
+.err{color:var(--red)}
+.empty{color:var(--muted);font-size:14px;padding:10px 0}
+</style>
+</head>
+<body>
+<div class="wrap">
+  <form class="login card" id="login" hidden>
+    <h1>JARVIS AI · Админка</h1>
+    <input type="password" id="key" placeholder="Пароль (ADMIN_KEY)" autocomplete="current-password" required>
+    <button type="submit">Войти</button>
+    <p class="err" id="loginErr"></p>
+  </form>
+
+  <main id="app" hidden>
+    <h1>JARVIS AI · Админка <small id="updated"></small>
+      <span style="margin-left:auto;display:flex;gap:8px"><button class="ghost" id="refresh">Обновить</button><button class="ghost" id="logout">Выйти</button></span></h1>
+
+    <div class="grid tiles">
+      <div class="card tile"><div class="n" id="tViews">0</div><div class="l">просмотров всего</div></div>
+      <div class="card tile"><div class="n" id="tVisitors">0</div><div class="l">посетителей (уник. в день)</div></div>
+      <div class="card tile"><div class="n" id="tDl">0</div><div class="l">скачиваний</div></div>
+      <div class="card tile"><div class="n" id="tLeads">0</div><div class="l">заявок</div></div>
+      <div class="card tile"><div class="n" id="tNew" style="color:var(--cyan)">0</div><div class="l">новых, без ответа</div></div>
+    </div>
+
+    <div class="grid two">
+      <div class="card"><h2>Последние 30 дней</h2><div class="chart" id="chart"></div>
+        <div class="axis"><span id="ax0"></span><span id="ax1"></span></div>
+        <div class="legend"><span style="--c:var(--indigo)">посетители</span><span style="--c:var(--cyan)">скачивания</span><span style="--c:var(--green)">заявки</span></div></div>
+      <div class="card"><h2>Откуда приходят (30 дней)</h2><table id="sources"></table></div>
+    </div>
+    <div class="grid three">
+      <div class="card"><h2>Страны</h2><table id="countries"></table></div>
+      <div class="card"><h2>Скачивания по источникам</h2><table id="dlSources"></table></div>
+      <div class="card"><h2>Конверсия (30 дней)</h2><table id="conv"></table></div>
+    </div>
+
+    <div class="card">
+      <h2>Заявки</h2>
+      <div class="filters" id="filters"></div>
+      <div id="leads"></div>
+    </div>
+  </main>
+</div>
+<script>
+const $ = s => document.querySelector(s);
+const STATUS = { new: 'новая', replied: 'ответил', won: 'заказ', lost: 'отказ', spam: 'спам' };
+let key = '', data = null, filter = 'all';
+try { key = sessionStorage.getItem('adminKey') || ''; } catch (e) {}
+
+const esc = s => String(s ?? '').replace(/[&<>"']/g, c => ({ '&': '&amp;', '<': '&lt;', '>': '&gt;', '"': '&quot;', "'": '&#39;' }[c]));
+const api = (opts = {}) => fetch('/api/admin', { ...opts, headers: { authorization: 'Bearer ' + key, 'content-type': 'application/json' } });
+
+async function load() {
+  const r = await api().catch(() => null);
+  if (!r || r.status === 401) { showLogin(r ? 'Неверный пароль' : 'Нет связи с сервером'); return; }
+  data = await r.json();
+  $('#login').hidden = true; $('#app').hidden = false;
+  render();
+}
+function showLogin(msg = '') {
+  $('#app').hidden = true; $('#login').hidden = false; $('#loginErr').textContent = msg;
+}
+function table(el, rows, label) {
+  const max = Math.max(1, ...rows.map(r => r.n));
+  el.innerHTML = rows.length ? rows.map(r => `<tr><td>${esc(r[label] || '—')}<div class="bar" style="width:${r.n / max * 100}%"></div></td><td class="n">${r.n}</td></tr>`).join('')
+    : '<tr><td class="empty">Пока пусто</td></tr>';
+}
+function render() {
+  const t = data.totals;
+  $('#tViews').textContent = t.views; $('#tVisitors').textContent = t.visitors; $('#tDl').textContent = t.downloads;
+  $('#tLeads').textContent = t.leads; $('#tNew').textContent = t.new_leads;
+  $('#updated').textContent = 'обновлено ' + new Date().toLocaleTimeString('ru');
+
+  // 30-day stacked bars
+  const days = [...Array(30)].map((_, i) => new Date(Date.now() - (29 - i) * 864e5).toISOString().slice(0, 10));
+  const by = (arr, k = 'n') => Object.fromEntries(arr.map(r => [r.day, r[k]]));
+  const U = by(data.views, 'u'), D = by(data.downloads), L = by(data.leadsByDay);
+  const max = Math.max(1, ...days.map(d => (U[d] || 0) + (D[d] || 0) + (L[d] || 0)));
+  $('#chart').innerHTML = days.map(d => {
+    const u = U[d] || 0, dl = D[d] || 0, l = L[d] || 0;
+    return `<div class="b" data-t="${d.slice(5)}: ${u} посет. · ${dl} скач. · ${l} заяв.">` +
+      `<i style="height:${u / max * 100}%;background:var(--indigo)"></i><i style="height:${dl / max * 100}%;background:var(--cyan)"></i><i style="height:${l / max * 100}%;background:var(--green)"></i></div>`;
+  }).join('');
+  $('#ax0').textContent = days[0].slice(5); $('#ax1').textContent = 'сегодня';
+
+  table($('#sources'), data.sources, 'source');
+  table($('#countries'), data.countries, 'country');
+  table($('#dlSources'), data.dlSources, 'source');
+  const vis = data.views.reduce((s, r) => s + r.u, 0), dls = data.downloads.reduce((s, r) => s + r.n, 0), lds = data.leadsByDay.reduce((s, r) => s + r.n, 0);
+  const pct = (a, b) => b ? (a / b * 100).toFixed(1) + '%' : '—';
+  $('#conv').innerHTML = `<tr><td>Посетитель → скачал</td><td class="n">${pct(dls, vis)}</td></tr><tr><td>Посетитель → заявка</td><td class="n">${pct(lds, vis)}</td></tr><tr><td>Посетителей</td><td class="n">${vis}</td></tr>`;
+
+  const counts = { all: data.leads.length };
+  data.leads.forEach(l => counts[l.status] = (counts[l.status] || 0) + 1);
+  $('#filters').innerHTML = ['all', ...Object.keys(STATUS)].map(s =>
+    `<button class="ghost ${filter === s ? 'on' : ''}" data-f="${s}">${s === 'all' ? 'все' : STATUS[s]} · ${counts[s] || 0}</button>`).join('');
+  const list = data.leads.filter(l => filter === 'all' || l.status === filter);
+  $('#leads').innerHTML = list.length ? list.map(l => `
+    <article class="lead ${l.status}">
+      <header><b>#${l.id} ${esc(l.name)}</b><span class="contact">${esc(l.contact)}</span>
+        <span class="meta">${esc(l.created_at)} UTC · ${esc(l.country || '?')} · ${esc(l.source || 'direct')} · ${esc(l.lang || '')}</span>
+        ${l.budget ? `<span class="pill">💰 ${esc(l.budget)}</span>` : ''}</header>
+      <div class="msg">${esc(l.message)}</div>
+      <select data-id="${l.id}">${Object.entries(STATUS).map(([k, v]) => `<option value="${k}" ${k === l.status ? 'selected' : ''}>${v}</option>`).join('')}</select>
+    </article>`).join('') : '<p class="empty">Заявок пока нет</p>';
+}
+
+$('#login').addEventListener('submit', e => {
+  e.preventDefault(); key = $('#key').value.trim();
+  try { sessionStorage.setItem('adminKey', key); } catch (err) {}
+  load();
+});
+$('#logout').addEventListener('click', () => { key = ''; try { sessionStorage.removeItem('adminKey'); } catch (e) {} showLogin(); });
+$('#refresh').addEventListener('click', load);
+$('#filters').addEventListener('click', e => { const f = e.target.dataset.f; if (f) { filter = f; render(); } });
+$('#leads').addEventListener('change', async e => {
+  const sel = e.target.closest('select[data-id]'); if (!sel) return;
+  const id = +sel.dataset.id, status = sel.value;
+  const r = await api({ method: 'POST', body: JSON.stringify({ id, status }) }).catch(() => null);
+  if (r && r.ok) { data.leads.find(l => l.id === id).status = status; data.totals.new_leads = data.leads.filter(l => l.status === 'new').length; render(); }
+  else alert('Не удалось сохранить');
+});
+key ? load() : showLogin();
+</script>
+</body>
+</html>

@@ -1,0 +1,16 @@
+# Cloudflare Pages: static site from deploy/, API in functions/, database in D1.
+name = "jarvis-ai-site"
+compatibility_date = "2026-10-01"
+pages_build_output_dir = "deploy"
+
+[[d1_databases]]
+binding = "DB"
+database_name = "jarvis-site-db"
+database_id = "254e3d68-86d6-49b3-bf04-f18f2d62635e"
+
+# Secrets (not stored here), set with:  npx wrangler pages secret put <NAME>
+#   ADMIN_KEY           password for /admin.html
+#   IP_SALT             any long random string, used to hash visitor IPs
+#   TELEGRAM_BOT_TOKEN  optional: bot from @BotFather that notifies you about new leads
+#   TELEGRAM_CHAT_ID    optional: your chat id with that bot
+# For local testing put the same names into .dev.vars (not committed).

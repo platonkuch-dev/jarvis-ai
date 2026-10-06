@@ -300,6 +300,25 @@
       <a class="btn btn-lg magnetic" href="https://www.fiverr.com/" data-fiverr target="_blank" rel="noopener" data-i18n="cta.b1">Order on Fiverr</a>
       <a class="btn btn-ghost btn-lg magnetic" href="mailto:you@example.com" data-mail data-i18n="cta.b2">Send an email</a>
     </div>
+    <form class="lead-form reveal" id="leadForm" data-delay="2" novalidate>
+      <p class="lead-or" data-i18n="form.or">…or leave a request right here</p>
+      <div class="lf-row">
+        <label><span data-i18n="form.name">Your name</span><input name="name" maxlength="80" autocomplete="name" required></label>
+        <label><span data-i18n="form.contact">Email or Telegram</span><input name="contact" maxlength="120" autocomplete="email" required data-i18n-ph="form.contactPh" placeholder="you@mail.com / @username"></label>
+      </div>
+      <label><span data-i18n="form.message">What should your assistant do?</span><textarea name="message" rows="4" maxlength="3000" required minlength="10" data-i18n-ph="form.messagePh" placeholder="Open my apps by voice, read my email, control the smart home…"></textarea></label>
+      <label class="lf-budget"><span data-i18n="form.budget">Budget</span>
+        <select name="budget">
+          <option value="" data-i18n="form.b0">Not sure yet</option>
+          <option value="<100">&lt; $100</option>
+          <option value="100-300">$100–300</option>
+          <option value="300-1000">$300–1000</option>
+          <option value="1000+">$1000+</option>
+        </select></label>
+      <input class="lf-hp" name="website" tabindex="-1" autocomplete="off" aria-hidden="true">
+      <button class="btn btn-lg" type="submit" data-i18n="form.send">Send request</button>
+      <p class="lf-status" id="leadStatus" role="status" aria-live="polite"></p>
+    </form>
   </div>
 </section>
 </main>

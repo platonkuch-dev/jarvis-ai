@@ -14,7 +14,9 @@ const SITE = {
   downloads: [
     { title: 'JARVIS AI — Windows installer', titleRu: 'JARVIS AI — установщик для Windows',
       desc: 'One-click installer with everything bundled.', descRu: 'Установщик «в один клик», всё уже внутри.',
-      meta: 'JarvisAI-Setup.exe · 280 MB', url: 'https://github.com/platonkuch-dev/jarvis_ai/releases/latest/download/JarvisAI-Setup.exe' },
+      meta: 'JarvisAI-Setup.exe · 280 MB',
+      // on the live site /dl/jarvis counts the download and redirects to the latest GitHub release
+      url: /^https?:/.test(location.protocol) ? '/dl/jarvis' : 'https://github.com/platonkuch-dev/jarvis-ai/releases/latest' },
   ],
 };
 
@@ -312,6 +314,8 @@ const i18nEls = $$('[data-i18n]');
 i18nEls.forEach(el => { el.dataset.en = el.innerHTML; });       // English = whatever is in the HTML
 const EN_META = { title: document.title, description: $('meta[name="description"]').content };
 const langBtns = $$('#lang button');
+const phEls = $$('[data-i18n-ph]');
+phEls.forEach(el => { el.dataset.enPh = el.placeholder; });
 
 function renderDownloads() {
   const items = (SITE.downloads || []).filter(d => d.url);
@@ -329,7 +333,7 @@ function renderDownloads() {
     const a = $('.btn', card);
     a.textContent = ru ? RU_META.dlBtn : 'Download';
     a.href = d.url;
-    if (/^https?:/i.test(d.url)) { a.target = '_blank'; a.rel = 'noopener'; } else a.setAttribute('download', '');
+    if (/^https?:/i.test(d.url)) { a.target = '_blank'; a.rel = 'noopener'; } else if (!d.url.startsWith('/dl/')) a.setAttribute('download', '');
     grid.appendChild(card);
     io.observe(card);
   }
@@ -340,6 +344,7 @@ function applyLang(next, restartDemo = true) {
   i18nEls.forEach(el => {
     el.innerHTML = lang === 'ru' ? (RU[el.dataset.i18n] ?? el.dataset.en) : el.dataset.en;
   });
+  phEls.forEach(el => { el.placeholder = lang === 'ru' ? (RU[el.dataset.i18nPh] ?? el.dataset.enPh) : el.dataset.enPh; });
   const meta = lang === 'ru' ? RU_META : EN_META;
   document.title = meta.title;
   $('meta[name="description"]').content = meta.description;
@@ -356,6 +361,51 @@ function applyLang(next, restartDemo = true) {
 }
 langBtns.forEach(b => b.addEventListener('click', () => { if (b.dataset.lang !== lang) applyLang(b.dataset.lang); }));
 applyLang(lang, false);
+
+/* ==========================================================================
+   VISIT STATS + LEAD FORM (Cloudflare Pages Functions → D1, see functions/)
+   ========================================================================== */
+const live = /^https?:/.test(location.protocol);
+// where the visitor came from: kept for the session so a lead sent later still knows it was TikTok/Reddit/…
+const visit = (() => {
+  const q = new URLSearchParams(location.search);
+  let v = { utm: q.get('utm_source') || q.get('ref') || '', ref: document.referrer || '' };
+  try {
+    const saved = JSON.parse(sessionStorage.getItem('visit') || 'null');
+    if (saved) v = saved; else sessionStorage.setItem('visit', JSON.stringify(v));
+  } catch (e) { /* storage blocked */ }
+  return v;
+})();
+const sourceGuess = () => {
+  if (visit.utm) return visit.utm.toLowerCase();
+  try { return visit.ref ? new URL(visit.ref).hostname.replace(/^www\./, '') : 'direct'; } catch (e) { return 'direct'; }
+};
+if (live) {
+  const body = JSON.stringify({ path: location.pathname, ref: document.referrer, utm: visit.utm, lang });
+  try { navigator.sendBeacon('/api/hit', new Blob([body], { type: 'text/plain' })); } catch (e) { /* stats are best-effort */ }
+}
+
+(function leadForm() {
+  const form = $('#leadForm'); if (!form) return;
+  const status = $('#leadStatus'), btn = $('button[type=submit]', form);
+  const T = () => lang === 'ru' ? RU_META.form : {
+    sending: 'Sending…', ok: 'Done! I’ll reply within 24 hours.', fill: 'Please fill in your name, contact and task (10+ characters).',
+    limit: 'Too many requests, please try again in an hour.', fail: 'Couldn’t send it. Please email me or message me on Fiverr.' };
+  const say = (msg, cls = '') => { status.textContent = msg; status.className = 'lf-status ' + cls; };
+  form.addEventListener('submit', async e => {
+    e.preventDefault();
+    const d = Object.fromEntries(new FormData(form));
+    if (!d.name.trim() || !d.contact.trim() || d.message.trim().length < 10) return say(T().fill, 'err');
+    btn.disabled = true; say(T().sending);
+    try {
+      const r = await fetch('/api/lead', { method: 'POST', headers: { 'content-type': 'application/json' },
+        body: JSON.stringify({ ...d, lang, source: sourceGuess() }) });
+      if (r.ok) { form.reset(); say(T().ok, 'ok'); }
+      else say(r.status === 429 ? T().limit : T().fail, 'err');
+    } catch (err) { say(T().fail, 'err'); }
+    btn.disabled = false;
+  });
+})();
 
 /* ==========================================================================
    THREE.JS — FIXED BACKGROUND SCENE
