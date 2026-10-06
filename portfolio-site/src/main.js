@@ -4,6 +4,13 @@ import { RU, RU_META, SCENARIOS_RU } from './i18n.js';
 /* ==========================================================================
    SITE SETTINGS — edit these, then run  build.bat  (or leave empty for defaults)
    ========================================================================== */
+// The backend (form, stats, download counter) lives on Cloudflare Pages. The same page is also mirrored
+// on GitHub Pages for networks that block *.pages.dev; there it calls the API cross-origin.
+const API_ORIGIN = 'https://jarvis-ai-site-98w.pages.dev';
+const ON_API_HOST = /^https?:/.test(location.protocol) &&
+  (location.hostname.endsWith('.pages.dev') || /^(localhost|127\.0\.0\.1)$/.test(location.hostname));
+const API = ON_API_HOST ? '' : API_ORIGIN;
+
 const SITE = {
   name: 'Platon_ind', // shown in the logo and footer
   fiverrUrl: 'https://www.fiverr.com/s/WeEzaZE',
@@ -16,7 +23,8 @@ const SITE = {
       desc: 'One-click installer with everything bundled.', descRu: 'Установщик «в один клик», всё уже внутри.',
       meta: 'JarvisAI-Setup.exe · 280 MB',
       // on the live site /dl/jarvis counts the download and redirects to the latest GitHub release
-      url: /^https?:/.test(location.protocol) ? '/dl/jarvis' : 'https://github.com/platonkuch-dev/jarvis-ai/releases/latest' },
+      // the mirror links straight to GitHub, which opens where Cloudflare is blocked
+      url: ON_API_HOST ? '/dl/jarvis' : 'https://github.com/platonkuch-dev/jarvis-ai/releases/latest' },
   ],
 };
 
@@ -381,8 +389,9 @@ const sourceGuess = () => {
   try { return visit.ref ? new URL(visit.ref).hostname.replace(/^www\./, '') : 'direct'; } catch (e) { return 'direct'; }
 };
 if (live) {
-  const body = JSON.stringify({ path: location.pathname, ref: document.referrer, utm: visit.utm, lang });
-  try { navigator.sendBeacon('/api/hit', new Blob([body], { type: 'text/plain' })); } catch (e) { /* stats are best-effort */ }
+  const path = (ON_API_HOST ? '' : 'mirror:') + location.pathname;
+  const body = JSON.stringify({ path, ref: document.referrer, utm: visit.utm, lang });
+  try { navigator.sendBeacon(API + '/api/hit', new Blob([body], { type: 'text/plain' })); } catch (e) { /* stats are best-effort */ }
 }
 
 (function leadForm() {
@@ -390,7 +399,8 @@ if (live) {
   const status = $('#leadStatus'), btn = $('button[type=submit]', form);
   const T = () => lang === 'ru' ? RU_META.form : {
     sending: 'Sending…', ok: 'Done! I’ll reply within 24 hours.', fill: 'Please fill in your name, contact and task (10+ characters).',
-    limit: 'Too many requests, please try again in an hour.', fail: 'Couldn’t send it. Please email me or message me on Fiverr.' };
+    limit: 'Too many requests, please try again in an hour.', fail: 'Couldn’t send it. Please email me or message me on Fiverr.',
+    offline: 'Your network blocks the form. Tap here to send the same request by email →' };
   const say = (msg, cls = '') => { status.textContent = msg; status.className = 'lf-status ' + cls; };
   form.addEventListener('submit', async e => {
     e.preventDefault();
@@ -398,11 +408,21 @@ if (live) {
     if (!d.name.trim() || !d.contact.trim() || d.message.trim().length < 10) return say(T().fill, 'err');
     btn.disabled = true; say(T().sending);
     try {
-      const r = await fetch('/api/lead', { method: 'POST', headers: { 'content-type': 'application/json' },
-        body: JSON.stringify({ ...d, lang, source: sourceGuess() }) });
+      // text/plain keeps it a "simple" request, so the mirror needs no CORS preflight
+      const r = await fetch(API + '/api/lead', { method: 'POST', headers: { 'content-type': 'text/plain' },
+        body: JSON.stringify({ ...d, lang, source: sourceGuess() + (ON_API_HOST ? '' : ' (mirror)') }) });
       if (r.ok) { form.reset(); say(T().ok, 'ok'); }
       else say(r.status === 429 ? T().limit : T().fail, 'err');
-    } catch (err) { say(T().fail, 'err'); }
+    } catch (err) {
+      // the API is unreachable (blocked network): offer the same request as a ready-made email
+      const subject = `JARVIS request from ${d.name}`;
+      const text = `${d.message}\n\nContact: ${d.contact}\nBudget: ${d.budget || '-'}`;
+      say('', 'err');
+      const a = document.createElement('a');
+      a.href = `mailto:${SITE.email}?subject=${encodeURIComponent(subject)}&body=${encodeURIComponent(text)}`;
+      a.textContent = T().offline; a.style.color = 'inherit'; a.style.textDecoration = 'underline';
+      status.appendChild(a);
+    }
     btn.disabled = false;
   });
 })();

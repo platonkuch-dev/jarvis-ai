@@ -1,7 +1,20 @@
 // POST /api/lead: saves an order request from the contact form and pings you in Telegram.
 import { json, country, ipHash, clip } from '../_lib.js';
 
-export async function onRequestPost({ request, env, waitUntil }) {
+// The GitHub Pages mirror (for networks that block *.pages.dev) posts here cross-origin.
+const MIRRORS = ['https://platonkuch-dev.github.io'];
+
+export async function onRequestPost(ctx) {
+  const res = await handle(ctx);
+  const origin = ctx.request.headers.get('origin');
+  if (MIRRORS.includes(origin)) {
+    res.headers.set('access-control-allow-origin', origin);
+    res.headers.set('vary', 'Origin');
+  }
+  return res;
+}
+
+async function handle({ request, env, waitUntil }) {
   let b;
   try { b = await request.json(); } catch { return json({ ok: false, error: 'bad_json' }, 400); }
 

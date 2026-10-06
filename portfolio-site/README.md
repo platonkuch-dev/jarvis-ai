@@ -42,9 +42,17 @@ Optional Telegram notifications about new leads: create a bot with @BotFather, s
 
 After changes: `build.bat`, then `npx wrangler pages deploy`.
 
+## Mirror on GitHub Pages (main public address)
+Some providers block `*.pages.dev`, so the public address is **https://platonkuch-dev.github.io**
+(repo `platonkuch-dev/platonkuch-dev.github.io`): the same `index.html` / `style.css` / `app.js` without the admin.
+There `app.js` sends the form and stats cross-origin to the Pages API (`API_ORIGIN` in `src/main.js`; allowed origins in
+`functions/api/lead.js`), the download button links straight to GitHub Releases, and if the API is blocked too, the form
+offers the same request as a ready-made email. After `build.bat`, copy those three files into a clone of the mirror repo and push.
+The admin stays at `https://jarvis-ai-site-98w.pages.dev/admin.html`.
+
 ## Tracking links
 Add `?utm_source=<name>` to links you post, so the dashboard shows where people came from:
-`https://<site>/?utm_source=tiktok`, `?utm_source=reddit`, `?utm_source=fiverr`. Download links can carry it too: `/dl/jarvis?utm_source=reddit`.
+`https://platonkuch-dev.github.io/?utm_source=tiktok`, `?utm_source=reddit`, `?utm_source=fiverr`. Download links can carry it too: `/dl/jarvis?utm_source=reddit`.
 Without it, the source is guessed from the referrer (TikTok and Reddit apps often send none, so they show up as `direct`).
 
 ## Local test

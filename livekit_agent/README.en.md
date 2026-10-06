@@ -2,7 +2,7 @@
 
 A voice assistant that listens, answers out loud and does things on your PC: opens apps, manages windows and files, drives After Effects, starts Claude Code, sets reminders, messages people on Telegram and answers phone calls. Built on [LiveKit Agents](https://docs.livekit.io/agents/), Claude (Anthropic), Deepgram and Edge TTS / ElevenLabs. The assistant speaks Russian by default (the language is a setting); the panel and most docs are in Russian, this page is the short English version.
 
-**Website: [jarvis-ai-site-98w.pages.dev](https://jarvis-ai-site-98w.pages.dev/?utm_source=github)** — demo, installer download, order a custom assistant.
+**Website: [platonkuch-dev.github.io](https://platonkuch-dev.github.io/?utm_source=github)** — demo, installer download, order a custom assistant.
 
 ## Quick start
 
