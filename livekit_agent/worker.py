@@ -43,7 +43,7 @@ from custom_tts import TTS as EdgeTTS
 from sleep_wake import SleepWakeController
 from tools import FUNCTION_TOOLS
 from tools import runtime as tool_runtime
-from tools import scheduling, shell, tasks, triggers, web
+from tools import content_plan, scheduling, shell, tasks, triggers, web
 from tools.memory import load_memory
 
 load_dotenv()
@@ -467,6 +467,7 @@ async def entrypoint(ctx: JobContext) -> None:
             asyncio.create_task(scheduling.reminder_loop(), name="reminders"),
             asyncio.create_task(tasks.task_runner_loop(), name="tasks"),
             asyncio.create_task(triggers.trigger_loop(), name="triggers"),
+            asyncio.create_task(content_plan.plan_loop(), name="content-plan"),
         ]
 
         async def _stop_background() -> None:
