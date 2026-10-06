@@ -1,0 +1,13 @@
+# Netlify: the public address of the site. Static files from deploy/, the backend stays on Cloudflare Pages
+# (functions/ + D1) and is reached through the edge function below. Env var PROXY_KEY = the Cloudflare secret.
+[build]
+  publish = "deploy"
+  edge_functions = "netlify/edge-functions"
+
+[[edge_functions]]
+  path = "/api/*"
+  function = "proxy"
+
+[[edge_functions]]
+  path = "/dl/*"
+  function = "proxy"

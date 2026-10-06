@@ -4,11 +4,11 @@ import { RU, RU_META, SCENARIOS_RU } from './i18n.js';
 /* ==========================================================================
    SITE SETTINGS — edit these, then run  build.bat  (or leave empty for defaults)
    ========================================================================== */
-// The backend (form, stats, download counter) lives on Cloudflare Pages. The same page is also mirrored
-// on GitHub Pages for networks that block *.pages.dev; there it calls the API cross-origin.
+// The backend (form, stats, download counter) lives on Cloudflare Pages. The public address is on Netlify,
+// which proxies /api/* and /dl/* to it (netlify.toml), so the API is same-origin there too. Only a static copy
+// without a proxy (e.g. GitHub Pages) has to call the API cross-origin.
 const API_ORIGIN = 'https://jarvis-ai-site-98w.pages.dev';
-const ON_API_HOST = /^https?:/.test(location.protocol) &&
-  (location.hostname.endsWith('.pages.dev') || /^(localhost|127\.0\.0\.1)$/.test(location.hostname));
+const ON_API_HOST = /^https?:/.test(location.protocol) && !location.hostname.endsWith('.github.io');
 const API = ON_API_HOST ? '' : API_ORIGIN;
 
 const SITE = {

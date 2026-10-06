@@ -27,7 +27,7 @@ async function handle({ request, env, waitUntil }) {
     "SELECT COUNT(*) AS n FROM leads WHERE ip_hash = ? AND created_at > datetime('now', '-1 hour')").bind(hash).first();
   if (recent.n >= 5) return json({ ok: false, error: 'rate_limited' }, 429);
 
-  const row = { name, contact, message, budget: clip(b.budget, 40), lang: clip(b.lang, 5), source: clip(b.source, 60), country: country(request) };
+  const row = { name, contact, message, budget: clip(b.budget, 40), lang: clip(b.lang, 5), source: clip(b.source, 60), country: country(request, env) };
   const res = await env.DB.prepare(
     'INSERT INTO leads (name, contact, message, budget, lang, source, country, ip_hash) VALUES (?,?,?,?,?,?,?,?)')
     .bind(row.name, row.contact, row.message, row.budget, row.lang, row.source, row.country, hash).run();

@@ -2,7 +2,7 @@
 
 Голосовой помощник, который слышит вас, отвечает голосом и умеет делать дела на компьютере: открывать программы, управлять окнами и файлами, работать в After Effects и Photoshop, запускать Claude Code, ставить напоминания, писать в Telegram и отвечать на телефонные звонки. В основе — [LiveKit Agents](https://docs.livekit.io/agents/), Claude (Anthropic), Deepgram и Edge TTS / ElevenLabs.
 
-**Сайт: [platonkuch-dev.github.io](https://platonkuch-dev.github.io/?utm_source=github)** — демо, скачивание установщика, заказ своего ассистента.
+**Сайт: [jarvis-ai-assistant-372.netlify.app](https://jarvis-ai-assistant-372.netlify.app/?utm_source=github)** — демо, скачивание установщика, заказ своего ассистента.
 
 **Английская версия: [README.en.md](README.en.md).**
 

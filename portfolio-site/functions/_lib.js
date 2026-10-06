@@ -6,13 +6,25 @@ export const json = (data, status = 200) =>
 const BOT_UA = /bot|crawl|spider|slurp|preview|facebookexternalhit|headless|lighthouse|monitor|curl|wget|python-requests/i;
 export const isBot = req => BOT_UA.test(req.headers.get('user-agent') || '');
 
-export const country = req => (req.cf && req.cf.country) || req.headers.get('cf-ipcountry') || null;
+// Requests proxied by the Netlify front (netlify.toml) arrive from Netlify's servers. They carry the
+// PROXY_KEY secret plus the visitor's real IP and country, which are trusted only with that key.
+export const viaProxy = (req, env) => !!env.PROXY_KEY && req.headers.get('x-proxy-key') === env.PROXY_KEY;
+
+// the site's own host as the visitor sees it (to tell internal referrers apart)
+export const publicHost = (req, env) =>
+  (viaProxy(req, env) && req.headers.get('x-forwarded-host')) || new URL(req.url).hostname;
+
+export const clientIp = (req, env) =>
+  (viaProxy(req, env) && (req.headers.get('x-forwarded-for') || '').split(',')[0].trim()) || req.headers.get('cf-connecting-ip') || '';
+
+export const country = (req, env) =>
+  (viaProxy(req, env) && req.headers.get('x-visitor-country')) || (req.cf && req.cf.country) || req.headers.get('cf-ipcountry') || null;
 
 export const device = req => /mobi|android|iphone|ipad/i.test(req.headers.get('user-agent') || '') ? 'mobile' : 'desktop';
 
 // The IP is never stored: SHA-256(ip + day + secret salt) lets a visitor be counted once a day without being tracked.
 export async function ipHash(req, env) {
-  const ip = req.headers.get('cf-connecting-ip') || '';
+  const ip = clientIp(req, env);
   const day = new Date().toISOString().slice(0, 10);
   const buf = await crypto.subtle.digest('SHA-256', new TextEncoder().encode(`${ip}|${day}|${env.IP_SALT || 'jarvis'}`));
   return [...new Uint8Array(buf)].slice(0, 12).map(b => b.toString(16).padStart(2, '0')).join('');
