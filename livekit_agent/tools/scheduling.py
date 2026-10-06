@@ -289,7 +289,8 @@ async def reminder_loop() -> None:
             now = datetime.now()
             for reminder in await take_due_reminders(now):
                 text = _announcement(reminder, now)
-                if not runtime.user_present():
+                # promo-plan steps (tools/content_plan.py) always go to Telegram too: the owner wants them on the phone
+                if not runtime.user_present() or reminder.get("telegram"):
                     notify.notify_owner(f"⏰ {text}", kind="reminder")
                 await runtime.say(text)
         except Exception:

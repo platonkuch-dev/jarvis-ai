@@ -155,7 +155,8 @@ async def materialize(now: datetime | None = None) -> int:
         if when > now:
             lead = f"Через {before} минут: " if before else ""
             text = f"{lead}{title}. {step.get('details', '')}".strip()
-            reminders.append({"id": uuid.uuid4().hex[:8], "text": _speakable(text), "at": when.isoformat(), "kind": "reminder"})
+            reminders.append({"id": uuid.uuid4().hex[:8], "text": _speakable(text), "at": when.isoformat(), "kind": "reminder",
+                              "telegram": True, "source": "content_plan"})
         new_keys.append(key)
 
     for item in plan.get("todos") or []:
@@ -176,15 +177,70 @@ async def materialize(now: datetime | None = None) -> int:
     # forget keys of dated steps that are long gone, so the state file doesn't grow forever
     cutoff = (now.date() - timedelta(days=30)).isoformat()
     keep = [k for k in done if not (k.startswith("w:") and k.rsplit(":", 1)[-1] < cutoff)]
-    await _state_store.mutate(lambda _s: ({"done": sorted(set(keep) | set(new_keys))}, None))
+    await _state_store.mutate(lambda s: ({**s, "done": sorted(set(keep) | set(new_keys))}, None))
     logger.info("content plan: added %d event(s), %d reminder(s), %d todo(s)", len(events), len(reminders), len(todos))
     return len(new_keys)
 
 
+DIGEST_HOUR = 9
+
+
+async def _mark_old_reminders() -> None:
+    """Reminders copied by 1.3.16 lack the Telegram flag; tag the ones that came from this plan."""
+    titles = {_speakable(s.get("title", "")) for s in (load_plan().get("weekly") or []) + (load_plan().get("once") or [])}
+    titles.discard("")
+
+    def _mutate(data: list):
+        changed = 0
+        for r in data:
+            if not r.get("telegram") and r.get("kind") == "reminder" and any(t in r.get("text", "") for t in titles):
+                r["telegram"], r["source"] = True, "content_plan"
+                changed += 1
+        return data, changed
+
+    if await _reminders_store.mutate(_mutate):
+        logger.info("content plan: older plan reminders now also go to Telegram")
+
+
+def digest(now: datetime) -> str:
+    """Morning message: today's plan steps and open to-dos."""
+    today = now.date().isoformat()
+    events = sorted((e for e in read_json(config.EVENTS_FILE, []) if str(e.get("start", "")).startswith(today)),
+                    key=lambda e: e.get("start", ""))
+    todos = [t.get("text", "") for t in read_json(config.TODOS_FILE, []) if isinstance(t, dict) and not t.get("done")]
+    lines = [f"🗓 План на сегодня, {now:%d.%m}:"]
+    lines += [f"• {e['start'][11:16]} — {e.get('title', '')}" for e in events] or ["• событий нет"]
+    if todos:
+        lines.append(f"\n📝 Открытые дела ({len(todos)}):")
+        lines += [f"• {t}" for t in todos[:10]]
+        if len(todos) > 10:
+            lines.append(f"…и ещё {len(todos) - 10}")
+    return "\n".join(lines)
+
+
+async def _send_digest(now: datetime) -> None:
+    """Once a day after DIGEST_HOUR: today's plan to Telegram."""
+    if not DIGEST_HOUR <= now.hour < 21:          # not at night if the PC is switched on late
+        return
+    today = now.date().isoformat()
+    state = await _state_store.load()
+    if state.get("digest") == today:
+        return
+    import notify
+
+    notify.notify_owner(digest(now), kind="day_plan")
+    await _state_store.mutate(lambda s: ({**s, "digest": today}, None))
+
+
 async def plan_loop() -> None:
+    try:
+        await _mark_old_reminders()
+    except Exception:
+        logger.exception("content plan: tagging old reminders failed")
     while True:
         try:
             await materialize()
+            await _send_digest(datetime.now())
         except Exception:
             logger.exception("content plan tick failed")
         await asyncio.sleep(_POLL_S)
